@@ -1,0 +1,172 @@
+<UserControl x:Class="CalculatorHost.Views.CalculatorListView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Background="{DynamicResource WindowBgBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="340" MinWidth="240" MaxWidth="480"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel: List -->
+        <Border Grid.Column="0"
+                Background="{DynamicResource SurfaceBgBrush}"
+                BorderBrush="{DynamicResource DividerColorBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Header -->
+                <StackPanel Grid.Row="0" Margin="20,20,20,12">
+                    <TextBlock Text="DOSTĘPNE KALKULATORY"
+                               FontFamily="Segoe UI Variable, Segoe UI"
+                               FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               Margin="0,0,0,6"/>
+                    <TextBlock x:Name="FolderPathText"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding FolderPath}"/>
+                </StackPanel>
+
+                <!-- Folder Missing Warning -->
+                <Border Grid.Row="1"
+                        Visibility="{Binding IsFolderMissing, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Margin="16,8">
+                    <StackPanel>
+                        <Border Background="{DynamicResource CardBgBrush}"
+                                CornerRadius="6" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="&#xE7BA;"
+                                           FontFamily="Segoe MDL2 Assets" FontSize="28"
+                                           Foreground="{DynamicResource ErrorBrush}"
+                                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                <TextBlock Text="Folder nie istnieje"
+                                           FontSize="13" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource ErrorBrush}"
+                                           HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                                <TextBlock FontSize="11"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"
+                                           TextWrapping="Wrap" TextAlignment="Center">
+                                    Zmień ścieżkę w pliku<LineBreak/>
+                                    <Bold>Services/CalculatorScannerService.cs</Bold>
+                                </TextBlock>
+                                <TextBlock x:Name="MissingFolderPath"
+                                           FontSize="10" FontFamily="Consolas"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           HorizontalAlignment="Center" Margin="0,8,0,0"
+                                           TextWrapping="Wrap" TextAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- Calculator List -->
+                <ListBox x:Name="CalculatorList"
+                         Grid.Row="1"
+                         ItemContainerStyle="{StaticResource CalculatorListItem}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Padding="12,4"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         SelectionChanged="CalculatorList_SelectionChanged"
+                         MouseDoubleClick="CalculatorList_MouseDoubleClick"
+                         KeyDown="CalculatorList_KeyDown"
+                         Visibility="{Binding IsFolderMissing, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0"
+                                           Text="{Binding DisplayName}"
+                                           FontFamily="Segoe UI Variable, Segoe UI"
+                                           FontSize="13" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Grid.Row="0" Grid.Column="1"
+                                           Text="{Binding FileSizeDisplay}"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                           Text="{Binding LastModifiedDisplay}"
+                                           FontSize="10"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,2,0,0"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- Footer -->
+                <Border Grid.Row="2"
+                        BorderBrush="{DynamicResource DividerColorBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="12,6">
+                    <Grid>
+                        <TextBlock x:Name="CountText"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   VerticalAlignment="Center"/>
+                        <Button Style="{StaticResource IconButton}"
+                                HorizontalAlignment="Right"
+                                Content="&#xE72C;"
+                                ToolTip="Odśwież listę kalkulatorów"
+                                Command="{Binding RefreshCommand}"
+                                Click="RefreshButton_Click"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Right Panel: Welcome -->
+        <Grid Grid.Column="1">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="&#xE8A5;"
+                           FontFamily="Segoe MDL2 Assets" FontSize="72"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center" Opacity="0.35"/>
+                <TextBlock Text="Wybierz kalkulator"
+                           FontFamily="Segoe UI Variable, Segoe UI"
+                           FontSize="20" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           HorizontalAlignment="Center" Margin="0,20,0,6" Opacity="0.5"/>
+                <TextBlock Text="Kliknij dwukrotnie lub wciśnij Enter, aby otworzyć"
+                           FontSize="12"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center" Opacity="0.5"/>
+            </StackPanel>
+
+            <!-- Error Notification -->
+            <Border VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                    Background="{DynamicResource ErrorBrush}"
+                    CornerRadius="6" Margin="20" Padding="14,10"
+                    Visibility="{Binding ErrorMessage, Converter={StaticResource NullToVisibilityConverter}}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Left"
+                               Text="&#xE7BA;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="14" Foreground="White"
+                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock Text="{Binding ErrorMessage}"
+                               FontSize="12" Foreground="White"
+                               TextWrapping="Wrap" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
