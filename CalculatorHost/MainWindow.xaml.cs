@@ -27,8 +27,7 @@ public partial class MainWindow {
     private void ShowListView() {
         TitleCalculatorName.Text = string.Empty;
         DisposeActiveCalculator();
-        var listView = new CalculatorListView(_mainViewModel);
-        MainContent.Content = listView;
+        MainContent.Content = new CalculatorListView(_mainViewModel);
     }
 
     private async void OnCalculatorOpenRequested(CalculatorInfo calculatorInfo) {
@@ -41,7 +40,12 @@ public partial class MainWindow {
             var workingCopy = new WorkingCopyService();
 
             _activeCalculatorViewModel = new CalculatorViewModel(
-                session, reader, macroConfig, workingCopy, App.ExcelWorker);
+                session,
+                reader,
+                macroConfig,
+                workingCopy,
+                App.ExcelWorker);
+
             _activeCalculatorViewModel.CloseRequested += OnCalculatorCloseRequested;
 
             var calculatorView = new CalculatorView(_activeCalculatorViewModel);
@@ -50,8 +54,22 @@ public partial class MainWindow {
 
             await _activeCalculatorViewModel.LoadCalculatorAsync(calculatorInfo);
         }
-        catch {
-            // ignored
+        catch (Exception exception) {
+            if (_activeCalculatorViewModel != null) {
+                _activeCalculatorViewModel.ShowExternalError(
+                    "Nie udało się uruchomić widoku kalkulatora",
+                    exception);
+
+                return;
+            }
+
+            MessageBox.Show(
+                $"Nie udało się uruchomić kalkulatora: {exception.Message}",
+                "Błąd uruchamiania kalkulatora",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+
+            ShowListView();
         }
     }
 
@@ -61,6 +79,7 @@ public partial class MainWindow {
 
     private void DisposeActiveCalculator() {
         if (_activeCalculatorViewModel == null) return;
+
         _activeCalculatorViewModel.CloseRequested -= OnCalculatorCloseRequested;
         _activeCalculatorViewModel.Dispose();
         _activeCalculatorViewModel = null;
@@ -76,7 +95,6 @@ public partial class MainWindow {
                 DragMove();
             }
             catch {
-                // ignored
             }
     }
 
@@ -93,6 +111,7 @@ public partial class MainWindow {
     }
 
     protected override void OnClosed(EventArgs e) {
+        _mainViewModel.CalculatorOpenRequested -= OnCalculatorOpenRequested;
         DisposeActiveCalculator();
         base.OnClosed(e);
     }

@@ -11,14 +11,15 @@ public partial class CalculatorView {
 
     public CalculatorView(CalculatorViewModel viewModel) {
         InitializeComponent();
+
         _viewModel = viewModel;
         DataContext = viewModel;
 
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
     }
 
-    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e) {
-        switch (e.PropertyName) {
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments) {
+        switch (eventArguments.PropertyName) {
             case nameof(CalculatorViewModel.SheetModel):
                 RenderSheet();
                 break;
@@ -34,11 +35,14 @@ public partial class CalculatorView {
             return;
         }
 
-        var canvas = SheetRenderer.RenderSheet(_viewModel.SheetModel, OnInputCommitted);
+        var canvas = SheetRenderer.RenderSheet(
+            _viewModel.SheetModel,
+            OnInputChanged);
+
         SheetScrollViewer.Content = canvas;
 
-        var inputCount = _viewModel.SheetModel.Cells.Count(c => c.IsInput);
-        var totalCells = _viewModel.SheetModel.Cells.Count(c => !c.IsMergedSlave);
+        var inputCount = _viewModel.SheetModel.Cells.Count(cell => cell.IsInput);
+        var totalCells = _viewModel.SheetModel.Cells.Count(cell => !cell.IsMergedSlave);
 
         SheetInfoText.Text =
             $"Arkusz: {_viewModel.SheetModel.SheetName}  ·  " +
@@ -75,16 +79,11 @@ public partial class CalculatorView {
         }
     }
 
-    private async void OnInputCommitted(int row, int column, string value) {
-        try {
-            await _viewModel.UpdateCellValueAsync(row, column, value);
-        }
-        catch {
-            // ignored
-        }
+    private void OnInputChanged(int row, int column, string value) {
+        _viewModel.SetPendingCellValue(row, column, value);
     }
 
-    private void BackButton_Click(object sender, RoutedEventArgs e) {
+    private void BackButton_Click(object sender, RoutedEventArgs eventArguments) {
         _viewModel.RequestClose();
     }
 }

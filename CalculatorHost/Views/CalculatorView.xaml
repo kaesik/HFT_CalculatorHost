@@ -4,59 +4,66 @@
 
     <Grid Background="{DynamicResource WindowBgBrush}">
         <Grid.RowDefinitions>
-            <!-- Toolbar -->
-            <RowDefinition Height="40"/>
-            <!-- Macro Buttons (optional) -->
-            <RowDefinition x:Name="MacroRow" Height="Auto"/>
-            <!-- Sheet Canvas -->
-            <RowDefinition Height="*"/>
-            <!-- Status Bar -->
-            <RowDefinition Height="24"/>
+            <RowDefinition Height="40" />
+            <RowDefinition x:Name="MacroRow" Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="24" />
         </Grid.RowDefinitions>
 
-        <!-- ═══════ Toolbar ═══════ -->
         <Border Grid.Row="0"
                 Background="{DynamicResource SurfaceBgBrush}"
                 BorderBrush="{DynamicResource DividerColorBrush}"
                 BorderThickness="0,0,0,1">
             <DockPanel Margin="6,0">
-                <!-- Back Button -->
                 <Button DockPanel.Dock="Left"
                         Style="{StaticResource BackButton}"
                         ToolTip="Wróć do listy kalkulatorów (zamknij kalkulator)"
                         Click="BackButton_Click">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock Text="Lista" FontFamily="Segoe UI Variable, Segoe UI"
-                                   FontSize="12" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                        <TextBlock Text="&#xE72B;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="Lista"
+                                   FontFamily="Segoe UI Variable, Segoe UI"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0" />
                     </StackPanel>
                 </Button>
 
-                <!-- Separator -->
                 <Border DockPanel.Dock="Left"
-                        Width="1" Background="{DynamicResource DividerColorBrush}"
-                        Margin="6,6"/>
+                        Width="1"
+                        Background="{DynamicResource DividerColorBrush}"
+                        Margin="6,6" />
 
-                <!-- Calculator Name -->
-                <TextBlock DockPanel.Dock="Left"
-                           Text="{Binding CalculatorName}"
-                           FontFamily="Segoe UI Variable, Segoe UI"
-                           FontSize="13" FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
-                           VerticalAlignment="Center" Margin="6,0"/>
+                <Button DockPanel.Dock="Right"
+                        Content="Przelicz"
+                        ToolTip="Zapisz wprowadzone wartości i przelicz arkusz"
+                        Command="{Binding CalculateCommand}"
+                        Style="{StaticResource MacroButton}"
+                        Margin="8,4,4,4"
+                        Padding="16,5" />
 
-                <!-- Status Message (right-aligned) -->
                 <TextBlock DockPanel.Dock="Right"
                            Text="{Binding StatusMessage}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
-                           VerticalAlignment="Center" Margin="12,0"
-                           Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibilityConverter}}"/>
+                           VerticalAlignment="Center"
+                           Margin="12,0,4,0"
+                           Visibility="{Binding StatusMessage, Converter={StaticResource NullToVisibilityConverter}}" />
+
+                <TextBlock DockPanel.Dock="Left"
+                           Text="{Binding CalculatorName}"
+                           FontFamily="Segoe UI Variable, Segoe UI"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           VerticalAlignment="Center"
+                           Margin="6,0" />
             </DockPanel>
         </Border>
 
-        <!-- ═══════ Macro Buttons Panel ═══════ -->
         <Border x:Name="MacroButtonsBorder"
                 Grid.Row="1"
                 Background="{DynamicResource CardBgBrush}"
@@ -68,44 +75,48 @@
                 <TextBlock DockPanel.Dock="Left"
                            Text="MAKRA"
                            FontFamily="Segoe UI Variable, Segoe UI"
-                           FontSize="10" FontWeight="SemiBold"
+                           FontSize="10"
+                           FontWeight="SemiBold"
                            Foreground="{DynamicResource TextTertiaryBrush}"
-                           VerticalAlignment="Center" Margin="0,0,14,0"/>
-                <WrapPanel x:Name="MacroButtonsPanel" Orientation="Horizontal"/>
+                           VerticalAlignment="Center"
+                           Margin="0,0,14,0" />
+                <WrapPanel x:Name="MacroButtonsPanel" Orientation="Horizontal" />
             </DockPanel>
         </Border>
 
-        <!-- ═══════ Sheet Area ═══════ -->
         <Border Grid.Row="2" Background="{DynamicResource ControlBgBrush}">
             <Grid>
-                <!-- Sheet ScrollViewer — content set in code-behind -->
                 <ScrollViewer x:Name="SheetScrollViewer"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Auto"
                               Background="White"
-                              Focusable="False"/>
+                              Focusable="False" />
 
-                <!-- Loading Overlay -->
                 <Border Background="{DynamicResource LoadingOverlayBrush}"
                         Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Opacity="0.9">
+                    <StackPanel VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                Opacity="0.9">
                         <TextBlock Text="&#xE9F5;"
-                                   FontFamily="Segoe MDL2 Assets" FontSize="36"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="36"
                                    Foreground="{DynamicResource AccentColorBrush}"
-                                   HorizontalAlignment="Center"/>
+                                   HorizontalAlignment="Center" />
                         <TextBlock Text="{Binding StatusMessage}"
                                    FontFamily="Segoe UI Variable, Segoe UI"
-                                   FontSize="14" FontWeight="SemiBold"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
-                                   HorizontalAlignment="Center" Margin="0,14,0,0"/>
+                                   HorizontalAlignment="Center"
+                                   Margin="0,14,0,0" />
                         <TextBlock Text="Proszę czekać…"
                                    FontSize="11"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
-                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                   HorizontalAlignment="Center"
+                                   Margin="0,4,0,0" />
                     </StackPanel>
                 </Border>
 
-                <!-- Error Overlay -->
                 <Border Background="{DynamicResource LoadingOverlayBrush}"
                         Visibility="{Binding HasError, Converter={StaticResource BoolToVisibilityConverter}}">
                     <Border Background="{DynamicResource CardBgBrush}"
@@ -115,36 +126,42 @@
                             VerticalAlignment="Center"
                             HorizontalAlignment="Center">
                         <Border.Effect>
-                            <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.3" Color="#000000"/>
+                            <DropShadowEffect BlurRadius="20"
+                                              ShadowDepth="4"
+                                              Opacity="0.3"
+                                              Color="#000000" />
                         </Border.Effect>
                         <StackPanel>
                             <TextBlock Text="&#xE7BA;"
-                                       FontFamily="Segoe MDL2 Assets" FontSize="42"
+                                       FontFamily="Segoe MDL2 Assets"
+                                       FontSize="42"
                                        Foreground="{DynamicResource ErrorBrush}"
-                                       HorizontalAlignment="Center"/>
+                                       HorizontalAlignment="Center" />
                             <TextBlock Text="Wystąpił błąd"
                                        FontFamily="Segoe UI Variable, Segoe UI"
-                                       FontSize="17" FontWeight="SemiBold"
+                                       FontSize="17"
+                                       FontWeight="SemiBold"
                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                       HorizontalAlignment="Center" Margin="0,14,0,8"/>
+                                       HorizontalAlignment="Center"
+                                       Margin="0,14,0,8" />
                             <TextBlock Text="{Binding ErrorMessage}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        HorizontalAlignment="Center"
-                                       TextWrapping="Wrap" TextAlignment="Center"
-                                       MaxWidth="380"/>
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       MaxWidth="380" />
                             <Button Content="Zamknij kalkulator"
                                     Style="{StaticResource MacroButton}"
                                     HorizontalAlignment="Center"
                                     Margin="0,20,0,0"
-                                    Click="BackButton_Click"/>
+                                    Click="BackButton_Click" />
                         </StackPanel>
                     </Border>
                 </Border>
             </Grid>
         </Border>
 
-        <!-- ═══════ Status Bar ═══════ -->
         <Border Grid.Row="3"
                 Background="{DynamicResource SurfaceBgBrush}"
                 BorderBrush="{DynamicResource DividerColorBrush}"
@@ -155,13 +172,13 @@
                            x:Name="SheetInfoText"
                            FontSize="10"
                            Foreground="{DynamicResource TextTertiaryBrush}"
-                           VerticalAlignment="Center"/>
+                           VerticalAlignment="Center" />
                 <TextBlock DockPanel.Dock="Right"
-                           Text="Zielone komórki = edytowalne  ·  Pozostałe = tylko odczyt"
+                           Text="Zmień wartości i kliknij Przelicz, aby zaktualizować wyniki"
                            FontSize="10"
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Right"
-                           VerticalAlignment="Center"/>
+                           VerticalAlignment="Center" />
             </DockPanel>
         </Border>
     </Grid>

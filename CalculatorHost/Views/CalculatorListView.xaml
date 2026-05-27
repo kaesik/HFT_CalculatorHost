@@ -4,8 +4,8 @@
 
     <Grid Background="{DynamicResource WindowBgBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="340" MinWidth="240" MaxWidth="480"/>
-            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="340" MinWidth="240" MaxWidth="480" />
+            <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- Left Panel: List -->
@@ -15,9 +15,9 @@
                 BorderThickness="0,0,1,0">
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <!-- Header -->
@@ -26,12 +26,12 @@
                                FontFamily="Segoe UI Variable, Segoe UI"
                                FontSize="10" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextTertiaryBrush}"
-                               Margin="0,0,0,6"/>
+                               Margin="0,0,0,6" />
                     <TextBlock x:Name="FolderPathText"
                                FontSize="10"
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                TextTrimming="CharacterEllipsis"
-                               ToolTip="{Binding FolderPath}"/>
+                               ToolTip="{Binding FolderPath}" />
                 </StackPanel>
 
                 <!-- Folder Missing Warning -->
@@ -45,23 +45,23 @@
                                 <TextBlock Text="&#xE7BA;"
                                            FontFamily="Segoe MDL2 Assets" FontSize="28"
                                            Foreground="{DynamicResource ErrorBrush}"
-                                           HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                           HorizontalAlignment="Center" Margin="0,0,0,10" />
                                 <TextBlock Text="Folder nie istnieje"
                                            FontSize="13" FontWeight="SemiBold"
                                            Foreground="{DynamicResource ErrorBrush}"
-                                           HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                                           HorizontalAlignment="Center" Margin="0,0,0,6" />
                                 <TextBlock FontSize="11"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
                                            HorizontalAlignment="Center"
                                            TextWrapping="Wrap" TextAlignment="Center">
-                                    Zmień ścieżkę w pliku<LineBreak/>
+                                    Zmień ścieżkę w pliku<LineBreak />
                                     <Bold>Services/CalculatorScannerService.cs</Bold>
                                 </TextBlock>
                                 <TextBlock x:Name="MissingFolderPath"
                                            FontSize="10" FontFamily="Consolas"
                                            Foreground="{DynamicResource TextTertiaryBrush}"
                                            HorizontalAlignment="Center" Margin="0,8,0,0"
-                                           TextWrapping="Wrap" TextAlignment="Center"/>
+                                           TextWrapping="Wrap" TextAlignment="Center" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -83,12 +83,12 @@
                         <DataTemplate>
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0"
@@ -96,17 +96,17 @@
                                            FontFamily="Segoe UI Variable, Segoe UI"
                                            FontSize="13" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                           TextTrimming="CharacterEllipsis"/>
+                                           TextTrimming="CharacterEllipsis" />
                                 <TextBlock Grid.Row="0" Grid.Column="1"
                                            Text="{Binding FileSizeDisplay}"
                                            FontSize="10"
                                            Foreground="{DynamicResource TextTertiaryBrush}"
-                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                           VerticalAlignment="Center" Margin="8,0,0,0" />
                                 <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                                            Text="{Binding LastModifiedDisplay}"
                                            FontSize="10"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
-                                           Margin="0,2,0,0"/>
+                                           Margin="0,2,0,0" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
@@ -121,13 +121,12 @@
                         <TextBlock x:Name="CountText"
                                    FontSize="10"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   VerticalAlignment="Center"/>
+                                   VerticalAlignment="Center" />
                         <Button Style="{StaticResource IconButton}"
                                 HorizontalAlignment="Right"
                                 Content="&#xE72C;"
                                 ToolTip="Odśwież listę kalkulatorów"
-                                Command="{Binding RefreshCommand}"
-                                Click="RefreshButton_Click"/>
+                                Command="{Binding RefreshCommand}" />
                     </Grid>
                 </Border>
             </Grid>
@@ -139,16 +138,16 @@
                 <TextBlock Text="&#xE8A5;"
                            FontFamily="Segoe MDL2 Assets" FontSize="72"
                            Foreground="{DynamicResource TextTertiaryBrush}"
-                           HorizontalAlignment="Center" Opacity="0.35"/>
+                           HorizontalAlignment="Center" Opacity="0.35" />
                 <TextBlock Text="Wybierz kalkulator"
                            FontFamily="Segoe UI Variable, Segoe UI"
                            FontSize="20" FontWeight="SemiBold"
                            Foreground="{DynamicResource TextSecondaryBrush}"
-                           HorizontalAlignment="Center" Margin="0,20,0,6" Opacity="0.5"/>
+                           HorizontalAlignment="Center" Margin="0,20,0,6" Opacity="0.5" />
                 <TextBlock Text="Kliknij dwukrotnie lub wciśnij Enter, aby otworzyć"
                            FontSize="12"
                            Foreground="{DynamicResource TextTertiaryBrush}"
-                           HorizontalAlignment="Center" Opacity="0.5"/>
+                           HorizontalAlignment="Center" Opacity="0.5" />
             </StackPanel>
 
             <!-- Error Notification -->
@@ -161,10 +160,10 @@
                                Text="&#xE7BA;"
                                FontFamily="Segoe MDL2 Assets"
                                FontSize="14" Foreground="White"
-                               VerticalAlignment="Center" Margin="0,0,10,0"/>
+                               VerticalAlignment="Center" Margin="0,0,10,0" />
                     <TextBlock Text="{Binding ErrorMessage}"
                                FontSize="12" Foreground="White"
-                               TextWrapping="Wrap" VerticalAlignment="Center"/>
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
         </Grid>

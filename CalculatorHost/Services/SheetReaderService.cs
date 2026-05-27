@@ -2,409 +2,678 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
 using CalculatorHost.Models;
-using Excel = Microsoft.Office.Interop.Excel;
 
 namespace CalculatorHost.Services;
 
-/// <summary>
-///     Reads the first worksheet from a workbook and converts it into a SheetModel
-///     that can be rendered by WPF without any further Excel dependency.
-///     Must be called from the ExcelWorker STA thread.
-/// </summary>
 public class SheetReaderService {
     private const double PointsToDips = 96.0 / 72.0;
 
+    private const int MaximumDirectReadCellCount = 3000;
+    private const int AdditionalRowsAfterLastContent = 6;
+    private const int AdditionalColumnsAfterLastContent = 4;
+
+    private const int ExcelColorIndexNone = -4142;
+
+    private const int ExcelBorderEdgeLeft = 7;
+    private const int ExcelBorderEdgeTop = 8;
+    private const int ExcelBorderEdgeBottom = 9;
+    private const int ExcelBorderEdgeRight = 10;
+
+    private const int ExcelLineStyleNone = -4142;
+    private const int ExcelValidationTypeList = 3;
+
+    private const int ExcelFindLookInFormulas = -4123;
+    private const int ExcelSearchOrderByRows = 1;
+    private const int ExcelSearchOrderByColumns = 2;
+    private const int ExcelSearchDirectionPrevious = 2;
+
+    private const int ExcelHorizontalAlignmentGeneral = 1;
+    private const int ExcelHorizontalAlignmentLeft = -4131;
+    private const int ExcelHorizontalAlignmentCenter = -4108;
+    private const int ExcelHorizontalAlignmentRight = -4152;
+    private const int ExcelHorizontalAlignmentJustify = -4130;
+
+    private const int ExcelVerticalAlignmentTop = -4160;
+    private const int ExcelVerticalAlignmentCenter = -4108;
+    private const int ExcelVerticalAlignmentBottom = -4107;
+
+    private const int ExcelBorderWeightHairline = 1;
+    private const int ExcelBorderWeightThin = 2;
+    private const int ExcelBorderWeightMedium = -4138;
+    private const int ExcelBorderWeightThick = 4;
+
+    private const string InputColorLightGreen = "#92D050";
+    private const string InputColorGreen = "#00B050";
+    private const string DropdownColor = "#00B0F0";
+
     public SheetModel ReadFirstSheet(ExcelSessionService session) {
-        Excel.Worksheet? worksheet = null;
-        Excel.Range? usedRange = null;
+        dynamic? worksheet = null;
+        dynamic? usedRange = null;
+        dynamic? usedRows = null;
+        dynamic? usedColumns = null;
 
         try {
             worksheet = session.GetFirstWorksheet();
             usedRange = worksheet.UsedRange;
+            usedRows = usedRange.Rows;
+            usedColumns = usedRange.Columns;
+
+            var usedFirstRow = Convert.ToInt32(usedRange.Row);
+            var usedFirstColumn = Convert.ToInt32(usedRange.Column);
+            var usedMaximumRow = usedFirstRow + Convert.ToInt32(usedRows.Count) - 1;
+            var usedMaximumColumn = usedFirstColumn + Convert.ToInt32(usedColumns.Count) - 1;
+
+            var readBounds = GetReadBounds(
+                (object)worksheet,
+                usedFirstRow,
+                usedFirstColumn,
+                usedMaximumRow,
+                usedMaximumColumn);
 
             var model = new SheetModel {
-                SheetName = worksheet.Name,
-                FirstRow = usedRange.Row,
-                FirstColumn = usedRange.Column,
-                MaxRow = usedRange.Row + usedRange.Rows.Count - 1,
-                MaxColumn = usedRange.Column + usedRange.Columns.Count - 1
+                SheetName = Convert.ToString(worksheet.Name) ?? string.Empty,
+                FirstRow = readBounds.FirstRow,
+                FirstColumn = readBounds.FirstColumn,
+                MaxRow = readBounds.MaximumRow,
+                MaxColumn = readBounds.MaximumColumn
             };
 
-            ReadColumnWidths(worksheet, model);
-            ReadRowHeights(worksheet, model);
-            ReadCells(worksheet, usedRange, model);
+            ReadColumnWidths((object)worksheet, model);
+            ReadRowHeights((object)worksheet, model);
+            ReadCells((object)worksheet, model);
 
             return model;
         }
         finally {
-            if (usedRange != null) Marshal.ReleaseComObject(usedRange);
-            if (worksheet != null) Marshal.ReleaseComObject(worksheet);
+            ReleaseComObject(usedColumns);
+            ReleaseComObject(usedRows);
+            ReleaseComObject(usedRange);
+            ReleaseComObject(worksheet);
         }
     }
 
-    private static void ReadColumnWidths(Excel.Worksheet worksheet, SheetModel model) {
-        for (var col = model.FirstColumn; col <= model.MaxColumn; col++) {
-            Excel.Range? colRange = null;
-            try {
-                colRange = (Excel.Range)worksheet.Columns[col];
-                var isHidden = (bool)colRange.Hidden;
-                var widthDips = isHidden ? 0.0 : Math.Max((double)colRange.Width * PointsToDips, 0.0);
-                model.ColumnWidths[col] = widthDips;
-            }
-            catch {
-                model.ColumnWidths[col] = model.DefaultColumnWidth;
-            }
-            finally {
-                if (colRange != null) Marshal.ReleaseComObject(colRange);
-            }
+    private static ReadBounds GetReadBounds(
+        object worksheetObject,
+        int usedFirstRow,
+        int usedFirstColumn,
+        int usedMaximumRow,
+        int usedMaximumColumn) {
+        var rowCount = usedMaximumRow - usedFirstRow + 1;
+        var columnCount = usedMaximumColumn - usedFirstColumn + 1;
+        var usedCellCount = (long)rowCount * columnCount;
+
+        if (usedCellCount <= MaximumDirectReadCellCount)
+            return new ReadBounds(
+                usedFirstRow,
+                usedFirstColumn,
+                usedMaximumRow,
+                usedMaximumColumn);
+
+        var lastContentRow = FindLastContentCoordinate(
+            worksheetObject,
+            ExcelSearchOrderByRows,
+            true);
+
+        var lastContentColumn = FindLastContentCoordinate(
+            worksheetObject,
+            ExcelSearchOrderByColumns,
+            false);
+
+        if (lastContentRow == null || lastContentColumn == null)
+            return new ReadBounds(
+                usedFirstRow,
+                usedFirstColumn,
+                Math.Min(usedMaximumRow, usedFirstRow + 30),
+                Math.Min(usedMaximumColumn, usedFirstColumn + 20));
+
+        return new ReadBounds(
+            usedFirstRow,
+            usedFirstColumn,
+            Math.Min(usedMaximumRow, lastContentRow.Value + AdditionalRowsAfterLastContent),
+            Math.Min(usedMaximumColumn, lastContentColumn.Value + AdditionalColumnsAfterLastContent));
+    }
+
+    private static int? FindLastContentCoordinate(
+        object worksheetObject,
+        int searchOrder,
+        bool returnRowCoordinate) {
+        dynamic worksheet = worksheetObject;
+        dynamic? cells = null;
+        dynamic? foundCell = null;
+
+        try {
+            cells = worksheet.Cells;
+
+            foundCell = cells.Find(
+                "*",
+                Type.Missing,
+                ExcelFindLookInFormulas,
+                Type.Missing,
+                searchOrder,
+                ExcelSearchDirectionPrevious,
+                false,
+                Type.Missing,
+                Type.Missing);
+
+            if (foundCell == null)
+                return null;
+
+            return returnRowCoordinate
+                ? Convert.ToInt32(foundCell.Row)
+                : Convert.ToInt32(foundCell.Column);
+        }
+        catch {
+            return null;
+        }
+        finally {
+            ReleaseComObject(foundCell);
+            ReleaseComObject(cells);
         }
     }
 
-    private static void ReadRowHeights(Excel.Worksheet worksheet, SheetModel model) {
-        for (var row = model.FirstRow; row <= model.MaxRow; row++) {
-            Excel.Range? rowRange = null;
-            try {
-                rowRange = (Excel.Range)worksheet.Rows[row];
-                var isHidden = (bool)rowRange.Hidden;
-                var heightDips = isHidden ? 0.0 : Math.Max((double)rowRange.Height * PointsToDips, 0.0);
-                model.RowHeights[row] = heightDips;
-            }
-            catch {
-                model.RowHeights[row] = model.DefaultRowHeight;
-            }
-            finally {
-                if (rowRange != null) Marshal.ReleaseComObject(rowRange);
-            }
-        }
-    }
+    private static void ReadColumnWidths(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? columns = null;
 
-    private void ReadCells(Excel.Worksheet worksheet, Excel.Range usedRange, SheetModel model) {
-        var mergedSlaves = new HashSet<(int Row, int Col)>();
+        try {
+            columns = worksheet.Columns;
 
-        for (var row = model.FirstRow; row <= model.MaxRow; row++) {
-            if (model.RowHeights.TryGetValue(row, out var rowH) && rowH == 0.0) continue;
+            for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
+                dynamic? columnRange = null;
 
-            for (var col = model.FirstColumn; col <= model.MaxColumn; col++) {
-                if (model.ColumnWidths.TryGetValue(col, out var colW) && colW == 0.0) continue;
-
-                if (mergedSlaves.Contains((row, col))) {
-                    model.Cells.Add(new CellModel { Row = row, Column = col, IsMergedSlave = true });
-                    continue;
-                }
-
-                Excel.Range? cell = null;
                 try {
-                    cell = (Excel.Range)worksheet.Cells[row, col];
-                    var cellModel = ReadSingleCell(cell, row, col, worksheet);
+                    columnRange = columns[column];
 
-                    // If this is the top-left of a merge, register all other cells as slaves
-                    if (cellModel.RowSpan > 1 || cellModel.ColSpan > 1)
-                        for (var mr = row; mr < row + cellModel.RowSpan; mr++)
-                        for (var mc = col; mc < col + cellModel.ColSpan; mc++)
-                            if (mr != row || mc != col)
-                                mergedSlaves.Add((mr, mc));
+                    var isHidden = Convert.ToBoolean(columnRange.Hidden);
+                    var width = Convert.ToDouble(columnRange.Width);
 
-                    model.Cells.Add(cellModel);
+                    model.ColumnWidths[column] = isHidden
+                        ? 0.0
+                        : Math.Max(width * PointsToDips, 0.0);
                 }
                 catch {
-                    model.Cells.Add(new CellModel {
-                        Row = row,
-                        Column = col,
-                        DisplayText = string.Empty,
-                        BackgroundColor = Colors.White
-                    });
+                    model.ColumnWidths[column] = model.DefaultColumnWidth;
                 }
                 finally {
-                    if (cell != null) Marshal.ReleaseComObject(cell);
+                    ReleaseComObject(columnRange);
                 }
             }
         }
+        finally {
+            ReleaseComObject(columns);
+        }
     }
 
-    private CellModel ReadSingleCell(Excel.Range cell, int row, int col, Excel.Worksheet worksheet) {
-        var model = new CellModel { Row = row, Column = col };
+    private static void ReadRowHeights(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? rows = null;
 
-        ReadValueAndText(cell, model);
-        ReadFont(cell, model);
-        ReadBackground(cell, model);
-        ReadAlignment(cell, model);
-        ReadBorders(cell, model);
-        ReadMerge(cell, model);
+        try {
+            rows = worksheet.Rows;
+
+            for (var row = model.FirstRow; row <= model.MaxRow; row++) {
+                dynamic? rowRange = null;
+
+                try {
+                    rowRange = rows[row];
+
+                    var isHidden = Convert.ToBoolean(rowRange.Hidden);
+                    var height = Convert.ToDouble(rowRange.Height);
+
+                    model.RowHeights[row] = isHidden
+                        ? 0.0
+                        : Math.Max(height * PointsToDips, 0.0);
+                }
+                catch {
+                    model.RowHeights[row] = model.DefaultRowHeight;
+                }
+                finally {
+                    ReleaseComObject(rowRange);
+                }
+            }
+        }
+        finally {
+            ReleaseComObject(rows);
+        }
+    }
+
+    private void ReadCells(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        var mergedSlaveCells = new HashSet<(int Row, int Column)>();
+        dynamic? cells = null;
+
+        try {
+            cells = worksheet.Cells;
+
+            for (var row = model.FirstRow; row <= model.MaxRow; row++) {
+                if (model.RowHeights.TryGetValue(row, out var rowHeight) && rowHeight == 0.0)
+                    continue;
+
+                for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
+                    if (model.ColumnWidths.TryGetValue(column, out var columnWidth) && columnWidth == 0.0)
+                        continue;
+
+                    if (mergedSlaveCells.Contains((row, column))) {
+                        model.Cells.Add(new CellModel {
+                            Row = row,
+                            Column = column,
+                            IsMergedSlave = true
+                        });
+
+                        continue;
+                    }
+
+                    dynamic? cell = null;
+
+                    try {
+                        cell = cells[row, column];
+
+                        var cellModel = ReadRenderableCell(
+                            (object)cell,
+                            row,
+                            column,
+                            worksheetObject);
+
+                        if (cellModel == null)
+                            continue;
+
+                        RegisterMergedSlaveCells(cellModel, mergedSlaveCells);
+                        model.Cells.Add(cellModel);
+                    }
+                    finally {
+                        ReleaseComObject(cell);
+                    }
+                }
+            }
+        }
+        finally {
+            ReleaseComObject(cells);
+        }
+    }
+
+    private CellModel? ReadRenderableCell(
+        object cellObject,
+        int row,
+        int column,
+        object worksheetObject) {
+        dynamic cell = cellObject;
+
+        var model = new CellModel {
+            Row = row,
+            Column = column
+        };
+
+        ReadValueAndText(cellObject, model);
+        var hasBackground = ReadBackground(cellObject, model);
+
+        if (!HasContent(model) && !hasBackground)
+            return null;
+
+        ReadFont(cellObject, model);
+        ReadAlignment(cellObject, model);
+        ReadBorders(cellObject, model);
+        ReadMerge(cellObject, model);
 
         if (model.IsInput)
-            ReadValidation(cell, model, worksheet);
+            ReadValidation(cellObject, model, worksheetObject);
 
         return model;
     }
 
-    private static void ReadValueAndText(Excel.Range cell, CellModel model) {
+    private static void RegisterMergedSlaveCells(
+        CellModel cellModel,
+        HashSet<(int Row, int Column)> mergedSlaveCells) {
+        if (cellModel.RowSpan <= 1 && cellModel.ColSpan <= 1)
+            return;
+
+        for (var row = cellModel.Row; row < cellModel.Row + cellModel.RowSpan; row++)
+        for (var column = cellModel.Column; column < cellModel.Column + cellModel.ColSpan; column++)
+            if (row != cellModel.Row || column != cellModel.Column)
+                mergedSlaveCells.Add((row, column));
+    }
+
+    private static bool HasContent(CellModel model) {
+        return model.RawValue != null || !string.IsNullOrWhiteSpace(model.DisplayText);
+    }
+
+    private static void ReadValueAndText(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+
         try {
             model.RawValue = cell.Value2;
-            model.DisplayText = cell.Text as string ?? model.RawValue?.ToString() ?? string.Empty;
+            model.DisplayText = Convert.ToString(cell.Text)
+                                ?? Convert.ToString(model.RawValue)
+                                ?? string.Empty;
         }
         catch {
             model.DisplayText = string.Empty;
         }
     }
 
-    private static void ReadFont(Excel.Range cell, CellModel model) {
-        Excel.Font? font = null;
+    private static bool ReadBackground(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+        dynamic? interior = null;
+
+        try {
+            interior = cell.Interior;
+            var colorIndex = Convert.ToInt32(interior.ColorIndex);
+
+            if (colorIndex == ExcelColorIndexNone) {
+                model.BackgroundColor = Colors.White;
+                model.IsInput = false;
+                model.InputType = CellInputType.None;
+                return false;
+            }
+
+            model.BackgroundColor = OleColorToMediaColor(Convert.ToInt32(interior.Color));
+
+            var colorHex = ToHex(model.BackgroundColor);
+
+            model.IsInput = colorHex is InputColorLightGreen or InputColorGreen or DropdownColor;
+            model.InputType = colorHex == DropdownColor
+                ? CellInputType.ComboBox
+                : model.IsInput
+                    ? CellInputType.TextBox
+                    : CellInputType.None;
+
+            return true;
+        }
+        catch {
+            model.BackgroundColor = Colors.White;
+            model.IsInput = false;
+            model.InputType = CellInputType.None;
+            return false;
+        }
+        finally {
+            ReleaseComObject(interior);
+        }
+    }
+
+    private static void ReadFont(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+        dynamic? font = null;
+
         try {
             font = cell.Font;
-            model.IsBold = font.Bold is true;
-            model.IsItalic = font.Italic is true;
+            model.IsBold = Convert.ToBoolean(font.Bold);
+            model.IsItalic = Convert.ToBoolean(font.Italic);
 
             try {
-                model.FontSize = (double)font.Size;
+                model.FontSize = Convert.ToDouble(font.Size);
             }
             catch {
                 model.FontSize = 11.0;
             }
 
             try {
-                if (font.Color is double colorValue)
-                    model.ForegroundColor = OleColorToMediaColor((int)colorValue);
-                else
-                    model.ForegroundColor = Colors.Black;
+                model.ForegroundColor = font.Color == null
+                    ? Colors.Black
+                    : OleColorToMediaColor(Convert.ToInt32(font.Color));
             }
             catch {
                 model.ForegroundColor = Colors.Black;
             }
         }
         catch {
-            // ignored
         }
         finally {
-            if (font != null) Marshal.ReleaseComObject(font);
+            ReleaseComObject(font);
         }
     }
 
-    private static void ReadBackground(Excel.Range cell, CellModel model) {
-        Excel.Interior? interior = null;
+    private static void ReadAlignment(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+
         try {
-            interior = cell.Interior;
-            var colorIndex = interior.ColorIndex;
-
-            if (colorIndex is (int)Excel.XlColorIndex.xlColorIndexNone) {
-                model.BackgroundColor = Colors.White;
-                model.IsInput = false;
-                return;
-            }
-
-            if (interior.Color is double bgDouble) {
-                model.BackgroundColor = OleColorToMediaColor((int)bgDouble);
-                model.IsInput = IsColorGreen(model.BackgroundColor);
-                model.InputType = model.IsInput ? CellInputType.TextBox : CellInputType.None;
-            }
-            else
-                model.BackgroundColor = Colors.White;
+            model.TextAlignment = ExcelHorizontalAlignmentToWpf(cell.HorizontalAlignment);
+            model.VerticalContentAlignment = ExcelVerticalAlignmentToWpf(cell.VerticalAlignment);
+            model.WrapText = Convert.ToBoolean(cell.WrapText);
         }
         catch {
-            model.BackgroundColor = Colors.White;
-        }
-        finally {
-            if (interior != null) Marshal.ReleaseComObject(interior);
         }
     }
 
-    private static void ReadAlignment(Excel.Range cell, CellModel model) {
-        try {
-            model.TextAlignment = ExcelHAlignToWpf(cell.HorizontalAlignment);
-            model.VerticalContentAlignment = ExcelVAlignToWpf(cell.VerticalAlignment);
-            model.WrapText = cell.WrapText is true;
-        }
-        catch {
-            // ignored
-        }
-    }
+    private void ReadBorders(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+        dynamic? borders = null;
 
-    private void ReadBorders(Excel.Range cell, CellModel model) {
-        Excel.Borders? borders = null;
         try {
             borders = cell.Borders;
             var dominantColor = Colors.Black;
 
-            model.BorderTopThickness = ReadBorderThickness(borders, Excel.XlBordersIndex.xlEdgeTop, ref dominantColor);
-            model.BorderBottomThickness =
-                ReadBorderThickness(borders, Excel.XlBordersIndex.xlEdgeBottom, ref dominantColor);
-            model.BorderLeftThickness =
-                ReadBorderThickness(borders, Excel.XlBordersIndex.xlEdgeLeft, ref dominantColor);
-            model.BorderRightThickness =
-                ReadBorderThickness(borders, Excel.XlBordersIndex.xlEdgeRight, ref dominantColor);
+            model.BorderTopThickness = ReadBorderThickness(borders, ExcelBorderEdgeTop, ref dominantColor);
+            model.BorderBottomThickness = ReadBorderThickness(borders, ExcelBorderEdgeBottom, ref dominantColor);
+            model.BorderLeftThickness = ReadBorderThickness(borders, ExcelBorderEdgeLeft, ref dominantColor);
+            model.BorderRightThickness = ReadBorderThickness(borders, ExcelBorderEdgeRight, ref dominantColor);
             model.BorderColor = dominantColor;
         }
         catch {
-            // ignored
         }
         finally {
-            if (borders != null) Marshal.ReleaseComObject(borders);
+            ReleaseComObject(borders);
         }
     }
 
-    private static double ReadBorderThickness(Excel.Borders borders, Excel.XlBordersIndex borderIndex,
+    private static double ReadBorderThickness(
+        dynamic borders,
+        int borderIndex,
         ref Color dominantColor) {
-        Excel.Border? border = null;
+        dynamic? border = null;
+
         try {
             border = borders[borderIndex];
-            var lineStyle = border.LineStyle;
-            if (lineStyle is int ls && ls != (int)Excel.XlLineStyle.xlLineStyleNone) {
-                var weight = border.Weight;
-                if (border.Color is double colorDouble)
-                    dominantColor = OleColorToMediaColor((int)colorDouble);
-                return ExcelBorderWeightToDips(weight);
+
+            if (Convert.ToInt32(border.LineStyle) == ExcelLineStyleNone)
+                return 0.0;
+
+            try {
+                dominantColor = OleColorToMediaColor(Convert.ToInt32(border.Color));
+            }
+            catch {
             }
 
-            return 0.0;
+            return ExcelBorderWeightToDips(border.Weight);
         }
         catch {
             return 0.0;
         }
         finally {
-            if (border != null) Marshal.ReleaseComObject(border);
+            ReleaseComObject(border);
         }
     }
 
-    private static void ReadMerge(Excel.Range cell, CellModel model) {
-        Excel.Range? mergeArea = null;
+    private static void ReadMerge(object cellObject, CellModel model) {
+        dynamic cell = cellObject;
+        dynamic? mergeArea = null;
+        dynamic? rows = null;
+        dynamic? columns = null;
+
         try {
-            if (cell.MergeCells is not true) return;
+            if (!Convert.ToBoolean(cell.MergeCells))
+                return;
 
             mergeArea = cell.MergeArea;
-            model.RowSpan = mergeArea.Rows.Count;
-            model.ColSpan = mergeArea.Columns.Count;
+            rows = mergeArea.Rows;
+            columns = mergeArea.Columns;
+
+            model.RowSpan = Convert.ToInt32(rows.Count);
+            model.ColSpan = Convert.ToInt32(columns.Count);
         }
         catch {
-            // ignored
         }
         finally {
-            if (mergeArea != null) Marshal.ReleaseComObject(mergeArea);
+            ReleaseComObject(columns);
+            ReleaseComObject(rows);
+            ReleaseComObject(mergeArea);
         }
     }
 
-    private void ReadValidation(Excel.Range cell, CellModel model, Excel.Worksheet worksheet) {
-        Excel.Validation? validation = null;
+    private void ReadValidation(
+        object cellObject,
+        CellModel model,
+        object worksheetObject) {
+        dynamic cell = cellObject;
+        dynamic? validation = null;
+
         try {
             validation = cell.Validation;
-            if (validation == null) return;
 
-            var validationType = validation.Type;
-            if (validationType != (int)Excel.XlDVType.xlValidateList) return;
+            if (Convert.ToInt32(validation.Type) != ExcelValidationTypeList)
+                return;
 
-            var formula = validation.Formula1;
-            if (string.IsNullOrEmpty(formula)) return;
+            var formula = Convert.ToString(validation.Formula1);
 
-            var values = ParseValidationFormula(formula, worksheet);
-            if (values.Count == 0) return;
+            if (string.IsNullOrWhiteSpace(formula))
+                return;
+
+            var values = ParseValidationFormula(formula, worksheetObject);
+
+            if (values.Count == 0)
+                return;
 
             model.DropdownValues = values;
             model.InputType = CellInputType.ComboBox;
         }
         catch {
-            // ignored
         }
         finally {
-            if (validation != null) Marshal.ReleaseComObject(validation);
+            ReleaseComObject(validation);
         }
     }
 
-    private static List<string> ParseValidationFormula(string formula, Excel.Worksheet worksheet) {
-        var result = new List<string>();
+    private static List<string> ParseValidationFormula(
+        string formula,
+        object worksheetObject) {
+        dynamic worksheet = worksheetObject;
+        var values = new List<string>();
 
-        if (formula.StartsWith('=')) {
-            // Reference to a range
-            Excel.Range? range = null;
-            try {
-                range = worksheet.Range[formula.TrimStart('=')];
-                foreach (Excel.Range rangeCell in range.Cells) {
-                    var value = rangeCell.Value2?.ToString();
-                    if (!string.IsNullOrEmpty(value)) result.Add(value);
-                    Marshal.ReleaseComObject(rangeCell);
+        if (!formula.StartsWith('=')) {
+            values.AddRange(
+                formula
+                    .Split(',')
+                    .Select(value => value.Trim())
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+
+            return values;
+        }
+
+        dynamic? range = null;
+        dynamic? cells = null;
+
+        try {
+            range = worksheet.Range[formula.TrimStart('=')];
+            cells = range.Cells;
+
+            var count = Convert.ToInt32(cells.Count);
+
+            for (var index = 1; index <= count; index++) {
+                dynamic? rangeCell = null;
+
+                try {
+                    rangeCell = cells[index];
+                    var value = Convert.ToString(rangeCell.Value2);
+
+                    if (!string.IsNullOrWhiteSpace(value))
+                        values.Add(value);
+                }
+                finally {
+                    ReleaseComObject(rangeCell);
                 }
             }
-            catch {
-                // ignored
-            }
-            finally {
-                if (range != null) Marshal.ReleaseComObject(range);
-            }
         }
-        else
-            // Comma-separated literal list
-            result.AddRange(formula.Split(',').Select(v => v.Trim()).Where(v => !string.IsNullOrEmpty(v)));
+        catch {
+        }
+        finally {
+            ReleaseComObject(cells);
+            ReleaseComObject(range);
+        }
 
-        return result;
+        return values;
+    }
+
+    private static string ToHex(Color color) {
+        return $"#{color.R:X2}{color.G:X2}{color.B:X2}";
     }
 
     private static Color OleColorToMediaColor(int oleColor) {
-        // Excel stores colors as BGR (blue in lowest byte)
-        var r = (byte)(oleColor & 0xFF);
-        var g = (byte)((oleColor >> 8) & 0xFF);
-        var b = (byte)((oleColor >> 16) & 0xFF);
-        return Color.FromRgb(r, g, b);
+        var red = (byte)(oleColor & 0xFF);
+        var green = (byte)((oleColor >> 8) & 0xFF);
+        var blue = (byte)((oleColor >> 16) & 0xFF);
+
+        return Color.FromRgb(red, green, blue);
     }
 
-    /// <summary>
-    ///     Detects whether a color is in the green hue range using HSV color space analysis.
-    ///     Covers standard Excel green fills: #00B050, #92D050, #C6EFCE, #00FF00 etc.
-    /// </summary>
-    private static bool IsColorGreen(Color color) {
-        var r = color.R / 255.0;
-        var g = color.G / 255.0;
-        var b = color.B / 255.0;
+    private static TextAlignment ExcelHorizontalAlignmentToWpf(object horizontalAlignment) {
+        int value;
 
-        var max = Math.Max(r, Math.Max(g, b));
-        var min = Math.Min(r, Math.Min(g, b));
-        var delta = max - min;
+        try {
+            value = Convert.ToInt32(horizontalAlignment);
+        }
+        catch {
+            return TextAlignment.Left;
+        }
 
-        if (delta < 0.08) return false; // too achromatic (gray/white/black)
-        if (max < 0.15) return false; // too dark
-
-        double hue;
-        if (Math.Abs(max - g) < 0.001)
-            hue = 60.0 * ((b - r) / delta + 2.0);
-        else if (Math.Abs(max - r) < 0.001)
-            hue = 60.0 * ((g - b) / delta % 6.0);
-        else
-            hue = 60.0 * ((r - g) / delta + 4.0);
-
-        if (hue < 0) hue += 360.0;
-
-        var saturation = max == 0 ? 0 : delta / max;
-
-        // Green hue range: approximately 70–165 degrees, saturation > 12%
-        return hue is >= 70.0 and <= 165.0 && saturation >= 0.12;
-    }
-
-    private static TextAlignment ExcelHAlignToWpf(object hAlign) {
-        if (hAlign is not int ha) return TextAlignment.Left;
-        return ha switch {
-            (int)Excel.XlHAlign.xlHAlignLeft => TextAlignment.Left,
-            (int)Excel.XlHAlign.xlHAlignCenter => TextAlignment.Center,
-            (int)Excel.XlHAlign.xlHAlignRight => TextAlignment.Right,
-            (int)Excel.XlHAlign.xlHAlignJustify => TextAlignment.Justify,
-            (int)Excel.XlHAlign.xlHAlignGeneral => TextAlignment.Left,
+        return value switch {
+            ExcelHorizontalAlignmentLeft => TextAlignment.Left,
+            ExcelHorizontalAlignmentCenter => TextAlignment.Center,
+            ExcelHorizontalAlignmentRight => TextAlignment.Right,
+            ExcelHorizontalAlignmentJustify => TextAlignment.Justify,
+            ExcelHorizontalAlignmentGeneral => TextAlignment.Left,
             _ => TextAlignment.Left
         };
     }
 
-    private static VerticalAlignment ExcelVAlignToWpf(object vAlign) {
-        if (vAlign is not int va) return VerticalAlignment.Center;
-        return va switch {
-            (int)Excel.XlVAlign.xlVAlignTop => VerticalAlignment.Top,
-            (int)Excel.XlVAlign.xlVAlignCenter => VerticalAlignment.Center,
-            (int)Excel.XlVAlign.xlVAlignBottom => VerticalAlignment.Bottom,
+    private static VerticalAlignment ExcelVerticalAlignmentToWpf(object verticalAlignment) {
+        int value;
+
+        try {
+            value = Convert.ToInt32(verticalAlignment);
+        }
+        catch {
+            return VerticalAlignment.Center;
+        }
+
+        return value switch {
+            ExcelVerticalAlignmentTop => VerticalAlignment.Top,
+            ExcelVerticalAlignmentCenter => VerticalAlignment.Center,
+            ExcelVerticalAlignmentBottom => VerticalAlignment.Bottom,
             _ => VerticalAlignment.Center
         };
     }
 
-    private static double ExcelBorderWeightToDips(object weight) {
-        if (weight is not int w) return 1.0;
-        return w switch {
-            (int)Excel.XlBorderWeight.xlHairline => 0.5,
-            (int)Excel.XlBorderWeight.xlThin => 1.0,
-            (int)Excel.XlBorderWeight.xlMedium => 2.0,
-            (int)Excel.XlBorderWeight.xlThick => 3.0,
+    private static double ExcelBorderWeightToDips(object borderWeight) {
+        int value;
+
+        try {
+            value = Convert.ToInt32(borderWeight);
+        }
+        catch {
+            return 1.0;
+        }
+
+        return value switch {
+            ExcelBorderWeightHairline => 0.5,
+            ExcelBorderWeightThin => 1.0,
+            ExcelBorderWeightMedium => 2.0,
+            ExcelBorderWeightThick => 3.0,
             _ => 1.0
         };
     }
+
+    private static void ReleaseComObject(object? comObject) {
+        if (comObject == null || !Marshal.IsComObject(comObject))
+            return;
+
+        try {
+            Marshal.FinalReleaseComObject(comObject);
+        }
+        catch {
+        }
+    }
+
+    private sealed record ReadBounds(
+        int FirstRow,
+        int FirstColumn,
+        int MaximumRow,
+        int MaximumColumn);
 }

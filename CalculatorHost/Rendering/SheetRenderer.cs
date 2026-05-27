@@ -6,22 +6,29 @@ using CalculatorHost.Models;
 
 namespace CalculatorHost.Rendering;
 
-/// <summary>
-///     Converts a SheetModel into a WPF Canvas containing positioned Border/TextBlock/TextBox/ComboBox
-///     elements that visually replicate the Excel worksheet.
-///     Canvas with absolute positioning is used because the sheet geometry (merged cells, variable
-///     column widths, variable row heights) cannot be reliably expressed with Grid rows/columns.
-/// </summary>
 public class SheetRenderer {
-    private const double MinCellSize = 2.0;
+    private const double MinimumCellSize = 2.0;
 
-    public static Canvas RenderSheet(SheetModel sheet, Action<int, int, string> onInputCommitted) {
-        var columnPositions = CalculatePositions(sheet.FirstColumn, sheet.MaxColumn, sheet.ColumnWidths,
+    public static Canvas RenderSheet(SheetModel sheet, Action<int, int, string> onInputChanged) {
+        var columnPositions = CalculatePositions(
+            sheet.FirstColumn,
+            sheet.MaxColumn,
+            sheet.ColumnWidths,
             sheet.DefaultColumnWidth);
-        var rowPositions = CalculatePositions(sheet.FirstRow, sheet.MaxRow, sheet.RowHeights, sheet.DefaultRowHeight);
 
-        var totalWidth = columnPositions.TryGetValue(sheet.MaxColumn + 1, out var tw) ? tw : sheet.DefaultColumnWidth;
-        var totalHeight = rowPositions.TryGetValue(sheet.MaxRow + 1, out var th) ? th : sheet.DefaultRowHeight;
+        var rowPositions = CalculatePositions(
+            sheet.FirstRow,
+            sheet.MaxRow,
+            sheet.RowHeights,
+            sheet.DefaultRowHeight);
+
+        var totalWidth = columnPositions.TryGetValue(sheet.MaxColumn + 1, out var width)
+            ? width
+            : sheet.DefaultColumnWidth;
+
+        var totalHeight = rowPositions.TryGetValue(sheet.MaxRow + 1, out var height)
+            ? height
+            : sheet.DefaultRowHeight;
 
         var canvas = new Canvas {
             Width = totalWidth,
@@ -34,12 +41,21 @@ public class SheetRenderer {
             if (!columnPositions.TryGetValue(cell.Column, out var cellX)) continue;
             if (!rowPositions.TryGetValue(cell.Row, out var cellY)) continue;
 
-            var cellWidth = CalculateSpanSize(cell.Column, cell.ColSpan, sheet.ColumnWidths, sheet.DefaultColumnWidth);
-            var cellHeight = CalculateSpanSize(cell.Row, cell.RowSpan, sheet.RowHeights, sheet.DefaultRowHeight);
+            var cellWidth = CalculateSpanSize(
+                cell.Column,
+                cell.ColSpan,
+                sheet.ColumnWidths,
+                sheet.DefaultColumnWidth);
 
-            if (cellWidth < MinCellSize || cellHeight < MinCellSize) continue;
+            var cellHeight = CalculateSpanSize(
+                cell.Row,
+                cell.RowSpan,
+                sheet.RowHeights,
+                sheet.DefaultRowHeight);
 
-            var element = CreateCellElement(cell, cellWidth, cellHeight, onInputCommitted);
+            if (cellWidth < MinimumCellSize || cellHeight < MinimumCellSize) continue;
+
+            var element = CreateCellElement(cell, cellWidth, cellHeight, onInputChanged);
 
             Canvas.SetLeft(element, cellX);
             Canvas.SetTop(element, cellY);
@@ -49,31 +65,41 @@ public class SheetRenderer {
         return canvas;
     }
 
-    private static Dictionary<int, double> CalculatePositions(int first, int last, Dictionary<int, double> sizes,
+    private static Dictionary<int, double> CalculatePositions(
+        int first,
+        int last,
+        Dictionary<int, double> sizes,
         double defaultSize) {
         var positions = new Dictionary<int, double>();
         var position = 0.0;
 
         for (var index = first; index <= last + 1; index++) {
             positions[index] = position;
-            var size = sizes.GetValueOrDefault(index, defaultSize);
-            position += size;
+            position += sizes.GetValueOrDefault(index, defaultSize);
         }
 
         return positions;
     }
 
-    private static double CalculateSpanSize(int startIndex, int span, Dictionary<int, double> sizes,
+    private static double CalculateSpanSize(
+        int startIndex,
+        int span,
+        Dictionary<int, double> sizes,
         double defaultSize) {
         var total = 0.0;
-        for (var i = startIndex; i < startIndex + span; i++)
-            total += sizes.GetValueOrDefault(i, defaultSize);
+
+        for (var index = startIndex; index < startIndex + span; index++)
+            total += sizes.GetValueOrDefault(index, defaultSize);
+
         return total;
     }
 
-    private static FrameworkElement CreateCellElement(CellModel cell, double width, double height,
-        Action<int, int, string> onInputCommitted) {
-        var border = new Border {
+    private static FrameworkElement CreateCellElement(
+        CellModel cell,
+        double width,
+        double height,
+        Action<int, int, string> onInputChanged) {
+        return new Border {
             Width = width,
             Height = height,
             Background = new SolidColorBrush(cell.BackgroundColor),
@@ -85,10 +111,10 @@ public class SheetRenderer {
                 cell.BorderBottomThickness),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true,
-            Child = cell.IsInput ? CreateInputControl(cell, onInputCommitted) : CreateReadOnlyControl(cell)
+            Child = cell.IsInput
+                ? CreateInputControl(cell, onInputChanged)
+                : CreateReadOnlyControl(cell)
         };
-
-        return border;
     }
 
     private static FrameworkElement CreateReadOnlyControl(CellModel cell) {
@@ -107,17 +133,18 @@ public class SheetRenderer {
         };
     }
 
-    private static FrameworkElement CreateInputControl(CellModel cell, Action<int, int, string> onInputCommitted) {
+    private static FrameworkElement CreateInputControl(
+        CellModel cell,
+        Action<int, int, string> onInputChanged) {
         if (cell.InputType == CellInputType.ComboBox && cell.DropdownValues.Count > 0)
-            return CreateComboBoxInput(cell, onInputCommitted);
+            return CreateComboBoxInput(cell, onInputChanged);
 
-        return CreateTextBoxInput(cell, onInputCommitted);
+        return CreateTextBoxInput(cell, onInputChanged);
     }
 
-    private static TextBox CreateTextBoxInput(CellModel cell, Action<int, int, string> onInputCommitted) {
-        var capturedRow = cell.Row;
-        var capturedColumn = cell.Column;
-
+    private static TextBox CreateTextBoxInput(
+        CellModel cell,
+        Action<int, int, string> onInputChanged) {
         var textBox = new TextBox {
             Text = cell.DisplayText,
             FontSize = Math.Max(cell.FontSize, 7.0),
@@ -134,7 +161,6 @@ public class SheetRenderer {
             AcceptsReturn = false,
             AcceptsTab = false,
             IsUndoEnabled = true,
-            // Set caret brush explicitly for visibility
             CaretBrush = new SolidColorBrush(
                 cell.ForegroundColor == Colors.White ? Colors.Black : cell.ForegroundColor)
         };
@@ -142,21 +168,18 @@ public class SheetRenderer {
         textBox.GotFocus += (_, _) => textBox.SelectAll();
 
         textBox.LostFocus += (_, _) =>
-            onInputCommitted(capturedRow, capturedColumn, textBox.Text);
+            onInputChanged(cell.Row, cell.Column, textBox.Text);
 
-        textBox.KeyDown += (_, e) => {
-            switch (e.Key) {
+        textBox.KeyDown += (_, eventArguments) => {
+            switch (eventArguments.Key) {
                 case Key.Return:
-                    onInputCommitted(capturedRow, capturedColumn, textBox.Text);
                     Keyboard.ClearFocus();
-                    e.Handled = true;
-                    break;
-                case Key.Tab:
-                    onInputCommitted(capturedRow, capturedColumn, textBox.Text);
+                    eventArguments.Handled = true;
                     break;
                 case Key.Escape:
+                    textBox.Text = cell.DisplayText;
                     Keyboard.ClearFocus();
-                    e.Handled = true;
+                    eventArguments.Handled = true;
                     break;
             }
         };
@@ -164,10 +187,9 @@ public class SheetRenderer {
         return textBox;
     }
 
-    private static ComboBox CreateComboBoxInput(CellModel cell, Action<int, int, string> onInputCommitted) {
-        var capturedRow = cell.Row;
-        var capturedColumn = cell.Column;
-
+    private static ComboBox CreateComboBoxInput(
+        CellModel cell,
+        Action<int, int, string> onInputChanged) {
         var comboBox = new ComboBox {
             ItemsSource = cell.DropdownValues,
             FontSize = Math.Max(cell.FontSize, 7.0),
@@ -180,14 +202,12 @@ public class SheetRenderer {
             IsEditable = false
         };
 
-        // Set current selection without triggering the event
-        var currentText = cell.DisplayText;
-        if (cell.DropdownValues.Contains(currentText))
-            comboBox.SelectedItem = currentText;
+        if (cell.DropdownValues.Contains(cell.DisplayText))
+            comboBox.SelectedItem = cell.DisplayText;
 
         comboBox.SelectionChanged += (_, _) => {
-            if (comboBox.SelectedItem is string selected)
-                onInputCommitted(capturedRow, capturedColumn, selected);
+            if (comboBox.SelectedItem is string selectedValue)
+                onInputChanged(cell.Row, cell.Column, selectedValue);
         };
 
         return comboBox;

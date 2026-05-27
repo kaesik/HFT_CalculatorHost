@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Windows.Input;
 using CalculatorHost.Models;
 using CalculatorHost.Services;
 
@@ -8,10 +9,9 @@ namespace CalculatorHost.ViewModels;
 
 public class MainViewModel : INotifyPropertyChanged {
     private readonly CalculatorScannerService _scanner;
-
     private ObservableCollection<CalculatorInfo> _calculators = [];
     private string _errorMessage = string.Empty;
-    private readonly string _folderPath = string.Empty;
+    private string _folderPath = string.Empty;
     private bool _isFolderMissing;
     private CalculatorInfo? _selectedCalculator;
 
@@ -34,22 +34,29 @@ public class MainViewModel : INotifyPropertyChanged {
     public CalculatorInfo? SelectedCalculator {
         get => _selectedCalculator;
         set {
+            if (Equals(_selectedCalculator, value)) return;
+
             _selectedCalculator = value;
             OnPropertyChanged();
+            CommandManager.InvalidateRequerySuggested();
         }
     }
 
     public string FolderPath {
         get => _folderPath;
-        private init {
+        private set {
+            if (_folderPath == value) return;
+
             _folderPath = value;
             OnPropertyChanged();
         }
     }
 
-    private bool IsFolderMissing {
+    public bool IsFolderMissing {
         get => _isFolderMissing;
-        set {
+        private set {
+            if (_isFolderMissing == value) return;
+
             _isFolderMissing = value;
             OnPropertyChanged();
         }
@@ -57,7 +64,9 @@ public class MainViewModel : INotifyPropertyChanged {
 
     public string ErrorMessage {
         get => _errorMessage;
-        set {
+        private set {
+            if (_errorMessage == value) return;
+
             _errorMessage = value;
             OnPropertyChanged();
         }
@@ -67,29 +76,38 @@ public class MainViewModel : INotifyPropertyChanged {
     public AsyncRelayCommand OpenCalculatorCommand { get; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
-
     public event Action<CalculatorInfo>? CalculatorOpenRequested;
 
     private void LoadCalculators() {
         try {
-            IsFolderMissing = !_scanner.FolderExists();
             ErrorMessage = string.Empty;
+            IsFolderMissing = !_scanner.FolderExists();
+            SelectedCalculator = null;
+
+            if (IsFolderMissing) {
+                Calculators = [];
+                return;
+            }
 
             var found = _scanner.ScanFolder();
             Calculators = new ObservableCollection<CalculatorInfo>(found);
 
-            if (!IsFolderMissing && found.Count == 0)
+            if (found.Count == 0)
                 ErrorMessage = $"Folder '{FolderPath}' jest pusty — brak plików .xlsm.";
         }
-        catch (Exception ex) {
-            ErrorMessage = $"Błąd podczas skanowania folderu: {ex.Message}";
+        catch (Exception exception) {
+            IsFolderMissing = false;
+            SelectedCalculator = null;
+            Calculators = [];
+            ErrorMessage = $"Błąd podczas skanowania folderu: {exception.Message}";
         }
     }
 
-    private async Task OpenSelectedCalculatorAsync() {
-        if (SelectedCalculator == null) return;
-        CalculatorOpenRequested?.Invoke(SelectedCalculator);
-        await Task.CompletedTask;
+    private Task OpenSelectedCalculatorAsync() {
+        if (SelectedCalculator != null)
+            CalculatorOpenRequested?.Invoke(SelectedCalculator);
+
+        return Task.CompletedTask;
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) {

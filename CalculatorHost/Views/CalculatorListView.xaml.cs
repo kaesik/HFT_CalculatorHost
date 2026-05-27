@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -8,6 +9,7 @@ namespace CalculatorHost.Views;
 
 public partial class CalculatorListView {
     private readonly MainViewModel _viewModel;
+    private bool _isSubscribed;
 
     public CalculatorListView(MainViewModel viewModel) {
         InitializeComponent();
@@ -17,21 +19,42 @@ public partial class CalculatorListView {
         CalculatorList.ItemsSource = viewModel.Calculators;
         FolderPathText.Text = viewModel.FolderPath;
         MissingFolderPath.Text = viewModel.FolderPath;
-
         UpdateCount();
 
-        viewModel.PropertyChanged += (_, e) => {
-            switch (e.PropertyName) {
-                case nameof(MainViewModel.Calculators):
-                    CalculatorList.ItemsSource = viewModel.Calculators;
-                    UpdateCount();
-                    break;
-                case nameof(MainViewModel.FolderPath):
-                    FolderPathText.Text = viewModel.FolderPath;
-                    MissingFolderPath.Text = viewModel.FolderPath;
-                    break;
-            }
-        };
+        Loaded += CalculatorListView_Loaded;
+        Unloaded += CalculatorListView_Unloaded;
+    }
+
+    private void CalculatorListView_Loaded(object sender, RoutedEventArgs e) {
+        if (_isSubscribed) return;
+
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _isSubscribed = true;
+
+        CalculatorList.ItemsSource = _viewModel.Calculators;
+        FolderPathText.Text = _viewModel.FolderPath;
+        MissingFolderPath.Text = _viewModel.FolderPath;
+        UpdateCount();
+    }
+
+    private void CalculatorListView_Unloaded(object sender, RoutedEventArgs e) {
+        if (!_isSubscribed) return;
+
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _isSubscribed = false;
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e) {
+        switch (e.PropertyName) {
+            case nameof(MainViewModel.Calculators):
+                CalculatorList.ItemsSource = _viewModel.Calculators;
+                UpdateCount();
+                break;
+            case nameof(MainViewModel.FolderPath):
+                FolderPathText.Text = _viewModel.FolderPath;
+                MissingFolderPath.Text = _viewModel.FolderPath;
+                break;
+        }
     }
 
     private void UpdateCount() {
@@ -49,6 +72,7 @@ public partial class CalculatorListView {
 
     private void CalculatorList_MouseDoubleClick(object sender, MouseButtonEventArgs e) {
         if (_viewModel.SelectedCalculator == null) return;
+
         if (_viewModel.OpenCalculatorCommand.CanExecute(null))
             _viewModel.OpenCalculatorCommand.Execute(null);
     }
@@ -56,14 +80,8 @@ public partial class CalculatorListView {
     private void CalculatorList_KeyDown(object sender, KeyEventArgs e) {
         if (e.Key != Key.Return && e.Key != Key.Enter) return;
         if (_viewModel.SelectedCalculator == null) return;
+
         if (_viewModel.OpenCalculatorCommand.CanExecute(null))
             _viewModel.OpenCalculatorCommand.Execute(null);
-    }
-
-    private void RefreshButton_Click(object sender, RoutedEventArgs e) {
-        CalculatorList.ItemsSource = null;
-        _viewModel.RefreshCommand.Execute(null);
-        CalculatorList.ItemsSource = _viewModel.Calculators;
-        UpdateCount();
     }
 }
