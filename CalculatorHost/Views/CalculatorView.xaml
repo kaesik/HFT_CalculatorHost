@@ -7,7 +7,7 @@
             <RowDefinition Height="40" />
             <RowDefinition x:Name="MacroRow" Height="Auto" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="24" />
+            <RowDefinition Height="42" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
@@ -167,19 +167,32 @@
                 BorderBrush="{DynamicResource DividerColorBrush}"
                 BorderThickness="0,1,0,0"
                 Padding="12,0">
-            <DockPanel VerticalAlignment="Center">
-                <TextBlock DockPanel.Dock="Left"
-                           x:Name="SheetInfoText"
-                           FontSize="10"
-                           Foreground="{DynamicResource TextTertiaryBrush}"
-                           VerticalAlignment="Center" />
-                <TextBlock DockPanel.Dock="Right"
+            <Grid VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <TextBlock x:Name="SheetInfoText"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <TextBlock Text="{Binding PerformanceMessage}"
+                               FontSize="10"
+                               Foreground="{DynamicResource AccentColorBrush}"
+                               Margin="0,2,12,0"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding PerformanceMessage}"
+                               Visibility="{Binding PerformanceMessage, Converter={StaticResource NullToVisibilityConverter}}" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="1"
                            Text="Zmień wartości i kliknij Przelicz, aby zaktualizować wyniki"
                            FontSize="10"
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Right"
                            VerticalAlignment="Center" />
-            </DockPanel>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>

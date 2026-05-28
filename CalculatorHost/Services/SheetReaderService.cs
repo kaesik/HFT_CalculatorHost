@@ -92,6 +92,48 @@ public class SheetReaderService {
         }
     }
 
+    public SheetModel RefreshCellValues(ExcelSessionService session, SheetModel model) {
+        dynamic? worksheet = null;
+        dynamic? cells = null;
+
+        try {
+            worksheet = session.GetFirstWorksheet();
+            cells = worksheet.Cells;
+
+            var values = ReadRangeValues((object)worksheet, (object)cells, model);
+
+            foreach (var cellModel in model.Cells.Where(cell => !cell.IsMergedSlave)) {
+                var rawValue = GetRangeValue(
+                    values,
+                    cellModel.Row - model.FirstRow + 1,
+                    cellModel.Column - model.FirstColumn + 1);
+
+                cellModel.RawValue = rawValue;
+
+                if (!HasBulkContent(rawValue)) {
+                    cellModel.DisplayText = string.Empty;
+                    continue;
+                }
+
+                dynamic? cell = null;
+
+                try {
+                    cell = cells[cellModel.Row, cellModel.Column];
+                    ReadDisplayText((object)cell, cellModel);
+                }
+                finally {
+                    ReleaseComObject(cell);
+                }
+            }
+
+            return model;
+        }
+        finally {
+            ReleaseComObject(cells);
+            ReleaseComObject(worksheet);
+        }
+    }
+
     private static ReadBounds GetReadBounds(
         object worksheetObject,
         int usedFirstRow,
@@ -244,6 +286,7 @@ public class SheetReaderService {
 
         try {
             cells = worksheet.Cells;
+            var values = ReadRangeValues(worksheetObject, (object)cells, model);
 
             for (var row = model.FirstRow; row <= model.MaxRow; row++) {
                 if (model.RowHeights.TryGetValue(row, out var rowHeight) && rowHeight == 0.0)
@@ -263,6 +306,11 @@ public class SheetReaderService {
                         continue;
                     }
 
+                    var rawValue = GetRangeValue(
+                        values,
+                        row - model.FirstRow + 1,
+                        column - model.FirstColumn + 1);
+
                     dynamic? cell = null;
 
                     try {
@@ -272,7 +320,8 @@ public class SheetReaderService {
                             (object)cell,
                             row,
                             column,
-                            worksheetObject);
+                            worksheetObject,
+                            rawValue);
 
                         if (cellModel == null)
                             continue;
@@ -295,15 +344,17 @@ public class SheetReaderService {
         object cellObject,
         int row,
         int column,
-        object worksheetObject) {
-        dynamic cell = cellObject;
-
+        object worksheetObject,
+        object? rawValue) {
         var model = new CellModel {
             Row = row,
-            Column = column
+            Column = column,
+            RawValue = rawValue
         };
 
-        ReadValueAndText(cellObject, model);
+        if (HasBulkContent(rawValue))
+            ReadDisplayText(cellObject, model);
+
         var hasBackground = ReadBackground(cellObject, model);
 
         if (!HasContent(model) && !hasBackground)
@@ -336,17 +387,61 @@ public class SheetReaderService {
         return model.RawValue != null || !string.IsNullOrWhiteSpace(model.DisplayText);
     }
 
-    private static void ReadValueAndText(object cellObject, CellModel model) {
+    private static object? ReadRangeValues(
+        object worksheetObject,
+        object cellsObject,
+        SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic cells = cellsObject;
+        dynamic? firstCell = null;
+        dynamic? lastCell = null;
+        dynamic? range = null;
+
+        try {
+            firstCell = cells[model.FirstRow, model.FirstColumn];
+            lastCell = cells[model.MaxRow, model.MaxColumn];
+            range = worksheet.Range[firstCell, lastCell];
+
+            return range.Value2;
+        }
+        finally {
+            ReleaseComObject(range);
+            ReleaseComObject(lastCell);
+            ReleaseComObject(firstCell);
+        }
+    }
+
+    private static object? GetRangeValue(object? values, int rowOffset, int columnOffset) {
+        if (values is not Array valuesArray || valuesArray.Rank != 2)
+            return rowOffset == 1 && columnOffset == 1 ? values : null;
+
+        var rowIndex = valuesArray.GetLowerBound(0) + rowOffset - 1;
+        var columnIndex = valuesArray.GetLowerBound(1) + columnOffset - 1;
+
+        if (rowIndex > valuesArray.GetUpperBound(0) || columnIndex > valuesArray.GetUpperBound(1))
+            return null;
+
+        return valuesArray.GetValue(rowIndex, columnIndex);
+    }
+
+    private static bool HasBulkContent(object? rawValue) {
+        return rawValue switch {
+            null => false,
+            string text => !string.IsNullOrWhiteSpace(text),
+            _ => true
+        };
+    }
+
+    private static void ReadDisplayText(object cellObject, CellModel model) {
         dynamic cell = cellObject;
 
         try {
-            model.RawValue = cell.Value2;
             model.DisplayText = Convert.ToString(cell.Text)
                                 ?? Convert.ToString(model.RawValue)
                                 ?? string.Empty;
         }
         catch {
-            model.DisplayText = string.Empty;
+            model.DisplayText = Convert.ToString(model.RawValue) ?? string.Empty;
         }
     }
 

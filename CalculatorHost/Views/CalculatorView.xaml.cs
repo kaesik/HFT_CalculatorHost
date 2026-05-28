@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using CalculatorHost.Models;
 using CalculatorHost.Rendering;
 using CalculatorHost.ViewModels;
 
@@ -8,6 +10,8 @@ namespace CalculatorHost.Views;
 
 public partial class CalculatorView {
     private readonly CalculatorViewModel _viewModel;
+    private RenderedSheet? _renderedSheet;
+    private SheetModel? _renderedSheetModel;
 
     public CalculatorView(CalculatorViewModel viewModel) {
         InitializeComponent();
@@ -21,7 +25,7 @@ public partial class CalculatorView {
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments) {
         switch (eventArguments.PropertyName) {
             case nameof(CalculatorViewModel.SheetModel):
-                RenderSheet();
+                UpdateOrRenderSheet();
                 break;
             case nameof(CalculatorViewModel.MacroButtons):
                 RebuildMacroButtons();
@@ -29,25 +33,44 @@ public partial class CalculatorView {
         }
     }
 
-    private void RenderSheet() {
-        if (_viewModel.SheetModel == null) {
+    private void UpdateOrRenderSheet() {
+        var sheetModel = _viewModel.SheetModel;
+
+        if (sheetModel == null) {
             SheetScrollViewer.Content = null;
+            _renderedSheet = null;
+            _renderedSheetModel = null;
             return;
         }
 
-        var canvas = SheetRenderer.RenderSheet(
-            _viewModel.SheetModel,
+        var renderingStopwatch = Stopwatch.StartNew();
+
+        if (_renderedSheet != null && ReferenceEquals(_renderedSheetModel, sheetModel)) {
+            SheetRenderer.UpdateCellValues(_renderedSheet, sheetModel);
+            renderingStopwatch.Stop();
+            _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
+            return;
+        }
+
+        _renderedSheet = SheetRenderer.RenderSheet(
+            sheetModel,
             OnInputChanged);
 
-        SheetScrollViewer.Content = canvas;
+        _renderedSheetModel = sheetModel;
+        SheetScrollViewer.Content = _renderedSheet.Canvas;
+        UpdateSheetInformation(sheetModel);
+        renderingStopwatch.Stop();
+        _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
+    }
 
-        var inputCount = _viewModel.SheetModel.Cells.Count(cell => cell.IsInput);
-        var totalCells = _viewModel.SheetModel.Cells.Count(cell => !cell.IsMergedSlave);
+    private void UpdateSheetInformation(SheetModel sheetModel) {
+        var inputCount = sheetModel.Cells.Count(cell => cell.IsInput);
+        var totalCells = sheetModel.Cells.Count(cell => !cell.IsMergedSlave);
 
         SheetInfoText.Text =
-            $"Arkusz: {_viewModel.SheetModel.SheetName}  ·  " +
-            $"Wiersze: {_viewModel.SheetModel.MaxRow}  ·  " +
-            $"Kolumny: {_viewModel.SheetModel.MaxColumn}  ·  " +
+            $"Arkusz: {sheetModel.SheetName}  ·  " +
+            $"Wiersze: {sheetModel.MaxRow}  ·  " +
+            $"Kolumny: {sheetModel.MaxColumn}  ·  " +
             $"Komórek: {totalCells}  ·  " +
             $"Pól edytowalnych: {inputCount}";
     }

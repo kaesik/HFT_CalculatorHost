@@ -6,10 +6,15 @@ using CalculatorHost.Models;
 
 namespace CalculatorHost.Rendering;
 
+public sealed class RenderedSheet {
+    public Canvas Canvas { get; init; } = new();
+    public Dictionary<(int Row, int Column), FrameworkElement> CellElements { get; } = [];
+}
+
 public class SheetRenderer {
     private const double MinimumCellSize = 2.0;
 
-    public static Canvas RenderSheet(SheetModel sheet, Action<int, int, string> onInputChanged) {
+    public static RenderedSheet RenderSheet(SheetModel sheet, Action<int, int, string> onInputChanged) {
         var columnPositions = CalculatePositions(
             sheet.FirstColumn,
             sheet.MaxColumn,
@@ -30,11 +35,13 @@ public class SheetRenderer {
             ? height
             : sheet.DefaultRowHeight;
 
-        var canvas = new Canvas {
-            Width = totalWidth,
-            Height = totalHeight,
-            Background = Brushes.White,
-            SnapsToDevicePixels = true
+        var renderedSheet = new RenderedSheet {
+            Canvas = new Canvas {
+                Width = totalWidth,
+                Height = totalHeight,
+                Background = Brushes.White,
+                SnapsToDevicePixels = true
+            }
         };
 
         foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
@@ -59,10 +66,49 @@ public class SheetRenderer {
 
             Canvas.SetLeft(element, cellX);
             Canvas.SetTop(element, cellY);
-            canvas.Children.Add(element);
+            renderedSheet.Canvas.Children.Add(element);
+            renderedSheet.CellElements[(cell.Row, cell.Column)] = element;
         }
 
-        return canvas;
+        return renderedSheet;
+    }
+
+    public static void UpdateCellValues(RenderedSheet renderedSheet, SheetModel sheet) {
+        foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
+            if (!renderedSheet.CellElements.TryGetValue((cell.Row, cell.Column), out var element))
+                continue;
+
+            if (element is not Border border)
+                continue;
+
+            switch (border.Child) {
+                case TextBlock textBlock:
+                    if (textBlock.Text != cell.DisplayText)
+                        textBlock.Text = cell.DisplayText;
+                    break;
+                case TextBox textBox:
+                    if (textBox.Text != cell.DisplayText)
+                        textBox.Text = cell.DisplayText;
+                    break;
+                case ComboBox comboBox:
+                    UpdateComboBoxValue(comboBox, cell.DisplayText);
+                    break;
+            }
+        }
+    }
+
+    private static void UpdateComboBoxValue(ComboBox comboBox, string value) {
+        if (Equals(comboBox.SelectedItem, value))
+            return;
+
+        comboBox.Tag = true;
+
+        try {
+            comboBox.SelectedItem = value;
+        }
+        finally {
+            comboBox.Tag = null;
+        }
     }
 
     private static Dictionary<int, double> CalculatePositions(
@@ -206,6 +252,9 @@ public class SheetRenderer {
             comboBox.SelectedItem = cell.DisplayText;
 
         comboBox.SelectionChanged += (_, _) => {
+            if (comboBox.Tag is true)
+                return;
+
             if (comboBox.SelectedItem is string selectedValue)
                 onInputChanged(cell.Row, cell.Column, selectedValue);
         };
