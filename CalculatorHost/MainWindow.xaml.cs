@@ -38,12 +38,14 @@ public partial class MainWindow {
             var reader = new SheetReaderService();
             var macroConfig = new MacroConfigService();
             var workingCopy = new WorkingCopyService();
+            var sheetLayoutCache = new SheetLayoutCacheService();
 
             _activeCalculatorViewModel = new CalculatorViewModel(
                 session,
                 reader,
                 macroConfig,
                 workingCopy,
+                sheetLayoutCache,
                 App.ExcelWorker);
 
             _activeCalculatorViewModel.CloseRequested += OnCalculatorCloseRequested;

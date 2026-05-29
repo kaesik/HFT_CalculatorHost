@@ -13,6 +13,7 @@ namespace CalculatorHost.ViewModels;
 public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private readonly ExcelSessionService _excelSession;
     private readonly Dictionary<(int Row, int Column), string> _pendingCellValues = [];
+    private readonly SheetLayoutCacheService _sheetLayoutCache;
     private readonly SheetReaderService _sheetReader;
     private readonly ExcelWorker _worker;
     private readonly WorkingCopyService _workingCopy;
@@ -32,10 +33,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         SheetReaderService sheetReader,
         MacroConfigService macroConfig,
         WorkingCopyService workingCopy,
+        SheetLayoutCacheService sheetLayoutCache,
         ExcelWorker worker) {
         _excelSession = excelSession;
         _sheetReader = sheetReader;
         _workingCopy = workingCopy;
+        _sheetLayoutCache = sheetLayoutCache;
         _worker = worker;
 
         CalculateCommand = new AsyncRelayCommand(CalculateAsync, () => !IsLoading && !HasError);
@@ -170,11 +173,40 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             await _worker.InvokeAsync(() => _excelSession.OpenSession(workingPath));
             openingStopwatch.Stop();
 
-            operationName = "odczytu pierwszego arkusza";
-            StatusMessage = "Odczyt arkusza…";
+            operationName = "sprawdzania pamięci układu arkusza";
+            StatusMessage = "Sprawdzanie pamięci układu…";
+            var cacheLoadStopwatch = Stopwatch.StartNew();
+            var isLayoutLoadedFromCache = _sheetLayoutCache.TryLoad(calculatorInfo, out var cachedModel);
+            cacheLoadStopwatch.Stop();
+
+            operationName = isLayoutLoadedFromCache
+                ? "odświeżania wartości arkusza"
+                : "odczytu pierwszego arkusza";
+            StatusMessage = isLayoutLoadedFromCache
+                ? "Odczyt wartości arkusza…"
+                : "Odczyt arkusza…";
+
             var readingStopwatch = Stopwatch.StartNew();
-            var model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
+            SheetModel model;
+
+            if (isLayoutLoadedFromCache && cachedModel != null)
+                model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, cachedModel));
+            else
+                model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
+
             readingStopwatch.Stop();
+
+            var cacheSaveMessage = string.Empty;
+
+            if (!isLayoutLoadedFromCache) {
+                var cacheSaveStopwatch = Stopwatch.StartNew();
+                var isCacheSaved = _sheetLayoutCache.TrySave(calculatorInfo, model);
+                cacheSaveStopwatch.Stop();
+
+                cacheSaveMessage = isCacheSaved
+                    ? $" · Zapis cache: {FormatDuration(cacheSaveStopwatch.Elapsed)}"
+                    : " · Zapis cache: niepowodzenie";
+            }
 
             operationName = "wczytywania konfiguracji makr";
             var macroConfigurationStopwatch = Stopwatch.StartNew();
@@ -183,11 +215,21 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
             if (_disposed) return;
 
+            var readMessage = isLayoutLoadedFromCache
+                ? $"Cache + wartości: {FormatDuration(readingStopwatch.Elapsed)}"
+                : $"Pełny odczyt arkusza: {FormatDuration(readingStopwatch.Elapsed)}";
+
+            var cacheMessage = isLayoutLoadedFromCache
+                ? $"Cache: użyty ({FormatDuration(cacheLoadStopwatch.Elapsed)})"
+                : $"Cache: brak ({FormatDuration(cacheLoadStopwatch.Elapsed)})";
+
             ClearPendingChanges();
             SetOperationPerformanceMessage(
                 $"Kopia: {FormatDuration(workingCopyStopwatch.Elapsed)} · " +
                 $"Excel: {FormatDuration(openingStopwatch.Elapsed)} · " +
-                $"Odczyt arkusza: {FormatDuration(readingStopwatch.Elapsed)} · " +
+                $"{cacheMessage} · " +
+                $"{readMessage}" +
+                $"{cacheSaveMessage} · " +
                 $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)}");
             SheetModel = model;
             MacroButtons = new ObservableCollection<MacroButtonConfig>(buttons);

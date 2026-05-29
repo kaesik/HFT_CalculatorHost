@@ -21,6 +21,14 @@ public class SheetReaderService {
 
     private const int ExcelLineStyleNone = -4142;
     private const int ExcelValidationTypeList = 3;
+    private const int ExcelCellTypeAllValidation = -4174;
+    private const int ExcelReferenceStyleA1 = 1;
+    private const int ExcelReferenceTypeAbsolute = 1;
+    private const int ExcelShapeTypeFormControl = 8;
+    private const int ExcelFormControlTypeDropdown = 2;
+    private const int ExcelFormControlTypeListBox = 6;
+    private const int ExcelCellControlTypeNone = 0;
+    private const int ExcelCellControlTypeCheckbox = 2;
 
     private const int ExcelFindLookInFormulas = -4123;
     private const int ExcelSearchOrderByRows = 1;
@@ -81,6 +89,7 @@ public class SheetReaderService {
             ReadColumnWidths((object)worksheet, model);
             ReadRowHeights((object)worksheet, model);
             ReadCells((object)worksheet, model);
+            ReadDropdownElements((object)worksheet, model);
 
             return model;
         }
@@ -125,6 +134,8 @@ public class SheetReaderService {
                     ReleaseComObject(cell);
                 }
             }
+
+            ReadDropdownElements((object)worksheet, model);
 
             return model;
         }
@@ -365,9 +376,6 @@ public class SheetReaderService {
         ReadBorders(cellObject, model);
         ReadMerge(cellObject, model);
 
-        if (model.IsInput)
-            ReadValidation(cellObject, model, worksheetObject);
-
         return model;
     }
 
@@ -603,6 +611,374 @@ public class SheetReaderService {
         }
     }
 
+    private void ReadDropdownElements(object worksheetObject, SheetModel model) {
+        ReadDataValidationDropdowns(worksheetObject, model);
+        ReadFormControlDropdowns(worksheetObject, model);
+        ReadActiveXDropdowns(worksheetObject, model);
+        ReadCellControlDropdowns(worksheetObject, model);
+    }
+
+    private void ReadCellControlDropdowns(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? cells = null;
+
+        try {
+            cells = worksheet.Cells;
+
+            foreach (var cellModel in model.Cells.Where(cell =>
+                         !cell.IsMergedSlave &&
+                         cell.InputType == CellInputType.ComboBox &&
+                         cell.DropdownValues.Count == 0)) {
+                dynamic? cell = null;
+                dynamic? cellControl = null;
+
+                try {
+                    cell = cells[cellModel.Row, cellModel.Column];
+                    cellControl = cell.CellControl;
+
+                    var type = Convert.ToInt32(cellControl.Type);
+
+                    if (type == ExcelCellControlTypeNone || type == ExcelCellControlTypeCheckbox)
+                        continue;
+
+                    var values = ReadCellControlValues(
+                        (object)cellControl,
+                        (object)cell,
+                        worksheetObject);
+
+                    if (values.Count == 0)
+                        continue;
+
+                    ApplyDropdownValues(
+                        cellModel,
+                        values,
+                        Convert.ToString(cell.Value2),
+                        null,
+                        false);
+                }
+                catch {
+                }
+                finally {
+                    ReleaseComObject(cellControl);
+                    ReleaseComObject(cell);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(cells);
+        }
+    }
+
+    private static List<string> ReadCellControlValues(
+        object cellControlObject,
+        object cellObject,
+        object worksheetObject) {
+        dynamic cellControl = cellControlObject;
+        dynamic cell = cellObject;
+
+        try {
+            var fillRange = Convert.ToString(cellControl.ListFillRange);
+            var values = ReadDropdownSourceValues(fillRange, worksheetObject);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        try {
+            var source = Convert.ToString(cellControl.Source);
+            var values = ReadDropdownSourceValues(source, worksheetObject);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        try {
+            var values = ExtractValidationValues(cellControl.Items);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        try {
+            var values = ExtractValidationValues(cellControl.Values);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        try {
+            var values = ExtractValidationValues(cell.Validation.Formula1);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        return [];
+    }
+
+    private void ReadDataValidationDropdowns(object worksheetObject, SheetModel model) {
+        ReadRenderedInputValidations(worksheetObject, model);
+
+        dynamic worksheet = worksheetObject;
+        dynamic? validationCells = null;
+        dynamic? cells = null;
+
+        try {
+            validationCells = worksheet.Cells.SpecialCells(ExcelCellTypeAllValidation);
+            cells = validationCells.Cells;
+
+            var count = Convert.ToInt32(cells.Count);
+
+            for (var index = 1; index <= count; index++) {
+                dynamic? cell = null;
+
+                try {
+                    cell = cells[index];
+
+                    var row = Convert.ToInt32(cell.Row);
+                    var column = Convert.ToInt32(cell.Column);
+
+                    if (!IsInsideRenderedSheet(row, column, model))
+                        continue;
+
+                    var cellModel = GetOrCreateDropdownCellModel(
+                        (object)cell,
+                        row,
+                        column,
+                        model);
+
+                    ReadValidation((object)cell, cellModel, worksheetObject);
+                }
+                finally {
+                    ReleaseComObject(cell);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(cells);
+            ReleaseComObject(validationCells);
+        }
+    }
+
+    private void ReadRenderedInputValidations(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? cells = null;
+
+        try {
+            cells = worksheet.Cells;
+
+            foreach (var cellModel in model.Cells.Where(cell =>
+                         !cell.IsMergedSlave &&
+                         cell.IsInput)) {
+                dynamic? cell = null;
+
+                try {
+                    cell = cells[cellModel.Row, cellModel.Column];
+                    ReadValidation((object)cell, cellModel, worksheetObject);
+                }
+                catch {
+                }
+                finally {
+                    ReleaseComObject(cell);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(cells);
+        }
+    }
+
+    private void ReadFormControlDropdowns(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? shapes = null;
+
+        try {
+            shapes = worksheet.Shapes;
+            var count = Convert.ToInt32(shapes.Count);
+
+            for (var index = 1; index <= count; index++) {
+                dynamic? shape = null;
+                dynamic? controlFormat = null;
+                dynamic? topLeftCell = null;
+
+                try {
+                    shape = shapes.Item(index);
+
+                    if (Convert.ToInt32(shape.Type) != ExcelShapeTypeFormControl)
+                        continue;
+
+                    var controlType = Convert.ToInt32(shape.FormControlType);
+
+                    if (controlType != ExcelFormControlTypeDropdown &&
+                        controlType != ExcelFormControlTypeListBox)
+                        continue;
+
+                    controlFormat = shape.ControlFormat;
+                    var values = ReadFormControlValues((object)controlFormat, worksheetObject);
+
+                    if (values.Count == 0)
+                        continue;
+
+                    topLeftCell = shape.TopLeftCell;
+
+                    var row = Convert.ToInt32(topLeftCell.Row);
+                    var column = Convert.ToInt32(topLeftCell.Column);
+
+                    if (!IsInsideRenderedSheet(row, column, model))
+                        continue;
+
+                    var cellModel = GetOrCreateDropdownCellModel(
+                        (object)topLeftCell,
+                        row,
+                        column,
+                        model);
+
+                    var selectedValue = ReadSelectedFormControlValue((object)controlFormat, values);
+                    var inputTarget = ReadLinkedCellPosition((object)controlFormat, worksheetObject);
+
+                    ApplyDropdownValues(
+                        cellModel,
+                        values,
+                        selectedValue,
+                        inputTarget,
+                        inputTarget != null);
+                }
+                catch {
+                }
+                finally {
+                    ReleaseComObject(topLeftCell);
+                    ReleaseComObject(controlFormat);
+                    ReleaseComObject(shape);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(shapes);
+        }
+    }
+
+    private void ReadActiveXDropdowns(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? objects = null;
+
+        try {
+            objects = worksheet.OLEObjects();
+            var count = Convert.ToInt32(objects.Count);
+
+            for (var index = 1; index <= count; index++) {
+                dynamic? embeddedObject = null;
+                dynamic? control = null;
+                dynamic? topLeftCell = null;
+
+                try {
+                    embeddedObject = objects.Item(index);
+                    control = embeddedObject.Object;
+
+                    var values = ReadActiveXValues(
+                        (object)embeddedObject,
+                        (object)control,
+                        worksheetObject);
+
+                    if (values.Count == 0)
+                        continue;
+
+                    topLeftCell = embeddedObject.TopLeftCell;
+
+                    var row = Convert.ToInt32(topLeftCell.Row);
+                    var column = Convert.ToInt32(topLeftCell.Column);
+
+                    if (!IsInsideRenderedSheet(row, column, model))
+                        continue;
+
+                    var cellModel = GetOrCreateDropdownCellModel(
+                        (object)topLeftCell,
+                        row,
+                        column,
+                        model);
+
+                    var selectedValue = ReadActiveXSelectedValue((object)control);
+                    var inputTarget = ReadLinkedCellPosition((object)embeddedObject, worksheetObject)
+                                      ?? ReadLinkedCellPosition((object)control, worksheetObject);
+
+                    ApplyDropdownValues(
+                        cellModel,
+                        values,
+                        selectedValue,
+                        inputTarget,
+                        false);
+                }
+                catch {
+                }
+                finally {
+                    ReleaseComObject(topLeftCell);
+                    ReleaseComObject(control);
+                    ReleaseComObject(embeddedObject);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(objects);
+        }
+    }
+
+    private CellModel GetOrCreateDropdownCellModel(
+        object cellObject,
+        int row,
+        int column,
+        SheetModel model) {
+        var existingCell = model.Cells.FirstOrDefault(cell =>
+            cell.Row == row &&
+            cell.Column == column &&
+            !cell.IsMergedSlave);
+
+        if (existingCell != null)
+            return existingCell;
+
+        dynamic cell = cellObject;
+
+        var cellModel = new CellModel {
+            Row = row,
+            Column = column
+        };
+
+        try {
+            cellModel.RawValue = cell.Value2;
+        }
+        catch {
+        }
+
+        ReadDisplayText(cellObject, cellModel);
+        ReadBackground(cellObject, cellModel);
+        ReadFont(cellObject, cellModel);
+        ReadAlignment(cellObject, cellModel);
+        ReadBorders(cellObject, cellModel);
+        ReadMerge(cellObject, cellModel);
+
+        model.Cells.Add(cellModel);
+
+        return cellModel;
+    }
+
     private void ReadValidation(
         object cellObject,
         CellModel model,
@@ -616,18 +992,25 @@ public class SheetReaderService {
             if (Convert.ToInt32(validation.Type) != ExcelValidationTypeList)
                 return;
 
-            var formula = Convert.ToString(validation.Formula1);
+            var formulas = new List<string>();
 
-            if (string.IsNullOrWhiteSpace(formula))
+            TryAddValidationFormula(formulas, Convert.ToString(validation.Formula1));
+
+            try {
+                TryAddValidationFormula(formulas, Convert.ToString(validation.Formula1Local));
+            }
+            catch {
+            }
+
+            foreach (var formula in formulas) {
+                var values = ReadDropdownSourceValues(formula, worksheetObject, cellObject);
+
+                if (values.Count == 0)
+                    continue;
+
+                ApplyDropdownValues(model, values, null, null, false);
                 return;
-
-            var values = ParseValidationFormula(formula, worksheetObject);
-
-            if (values.Count == 0)
-                return;
-
-            model.DropdownValues = values;
-            model.InputType = CellInputType.ComboBox;
+            }
         }
         catch {
         }
@@ -636,54 +1019,402 @@ public class SheetReaderService {
         }
     }
 
-    private static List<string> ParseValidationFormula(
+    private static void TryAddValidationFormula(List<string> formulas, string? formula) {
+        var normalizedFormula = formula?.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedFormula))
+            return;
+
+        if (!formulas.Contains(normalizedFormula, StringComparer.Ordinal))
+            formulas.Add(normalizedFormula);
+
+        var dynamicArrayFormula = NormalizeDynamicArrayFormula(normalizedFormula);
+
+        if (!formulas.Contains(dynamicArrayFormula, StringComparer.Ordinal))
+            formulas.Add(dynamicArrayFormula);
+    }
+
+    private static string NormalizeDynamicArrayFormula(string formula) {
+        const string anchorArrayFunction = "_xlfn.ANCHORARRAY(";
+
+        var functionStart = formula.IndexOf(anchorArrayFunction, StringComparison.OrdinalIgnoreCase);
+
+        if (functionStart < 0 || !formula.EndsWith(')'))
+            return formula;
+
+        var argumentStart = functionStart + anchorArrayFunction.Length;
+        var argumentLength = formula.Length - argumentStart - 1;
+
+        if (argumentLength <= 0)
+            return formula;
+
+        var argument = formula.Substring(argumentStart, argumentLength);
+
+        return $"{formula[..functionStart]}{argument}#";
+    }
+
+    private static List<string> ReadDropdownSourceValues(
+        string? source,
+        object worksheetObject,
+        object? relativeToCellObject = null) {
+        if (string.IsNullOrWhiteSpace(source))
+            return [];
+
+        var trimmedSource = source.Trim();
+
+        if (!trimmedSource.StartsWith('=') &&
+            (trimmedSource.Contains(',') || trimmedSource.Contains(';')))
+            return SplitValidationValues(trimmedSource);
+
+        foreach (var expression in BuildEvaluationExpressions(trimmedSource)) {
+            var expressionInCellContext = ConvertRelativeValidationFormula(
+                expression,
+                worksheetObject,
+                relativeToCellObject);
+
+            var values = ReadEvaluatedValidationValues(expressionInCellContext, worksheetObject);
+
+            if (values.Count > 0)
+                return values;
+
+            if (!string.Equals(expressionInCellContext, expression, StringComparison.Ordinal)) {
+                values = ReadEvaluatedValidationValues(expression, worksheetObject);
+
+                if (values.Count > 0)
+                    return values;
+            }
+        }
+
+        var reference = trimmedSource.TrimStart('=');
+        var rangeValues = ReadRangeValidationValues(reference, worksheetObject);
+
+        if (rangeValues.Count > 0)
+            return rangeValues;
+
+        return trimmedSource.StartsWith('=')
+            ? []
+            : SplitValidationValues(trimmedSource);
+    }
+
+    private static string ConvertRelativeValidationFormula(
+        string formula,
+        object worksheetObject,
+        object? relativeToCellObject) {
+        if (relativeToCellObject == null || !formula.StartsWith('='))
+            return formula;
+
+        dynamic worksheet = worksheetObject;
+        dynamic? application = null;
+
+        try {
+            application = worksheet.Application;
+
+            var convertedFormula = application.ConvertFormula(
+                formula,
+                ExcelReferenceStyleA1,
+                ExcelReferenceStyleA1,
+                ExcelReferenceTypeAbsolute,
+                relativeToCellObject);
+
+            return Convert.ToString(convertedFormula) ?? formula;
+        }
+        catch {
+            return formula;
+        }
+        finally {
+            ReleaseComObject(application);
+        }
+    }
+
+    private static List<string> BuildEvaluationExpressions(string source) {
+        var expressions = new List<string>();
+
+        TryAddExpression(expressions, source.StartsWith('=') ? source : $"={source}");
+        TryAddExpression(expressions, NormalizeDynamicArrayFormula(
+            source.StartsWith('=') ? source : $"={source}"));
+
+        return expressions;
+    }
+
+    private static void TryAddExpression(List<string> expressions, string expression) {
+        if (!expressions.Contains(expression, StringComparer.Ordinal))
+            expressions.Add(expression);
+    }
+
+    private static List<string> SplitValidationValues(string valuesText) {
+        var normalizedText = valuesText.Trim();
+
+        if (normalizedText.Length >= 2 &&
+            normalizedText.StartsWith('"') &&
+            normalizedText.EndsWith('"'))
+            normalizedText = normalizedText[1..^1];
+
+        return normalizedText
+            .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => value.Trim())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.CurrentCulture)
+            .ToList();
+    }
+
+    private static List<string> ReadEvaluatedValidationValues(
         string formula,
         object worksheetObject) {
         dynamic worksheet = worksheetObject;
-        var values = new List<string>();
-
-        if (!formula.StartsWith('=')) {
-            values.AddRange(
-                formula
-                    .Split(',')
-                    .Select(value => value.Trim())
-                    .Where(value => !string.IsNullOrWhiteSpace(value)));
-
-            return values;
-        }
-
-        dynamic? range = null;
-        dynamic? cells = null;
+        dynamic? application = null;
+        object? evaluatedValue = null;
 
         try {
-            range = worksheet.Range[formula.TrimStart('=')];
-            cells = range.Cells;
+            try {
+                evaluatedValue = worksheet.Evaluate(formula);
+                var values = ExtractValidationValues(evaluatedValue);
 
-            var count = Convert.ToInt32(cells.Count);
-
-            for (var index = 1; index <= count; index++) {
-                dynamic? rangeCell = null;
-
-                try {
-                    rangeCell = cells[index];
-                    var value = Convert.ToString(rangeCell.Value2);
-
-                    if (!string.IsNullOrWhiteSpace(value))
-                        values.Add(value);
-                }
-                finally {
-                    ReleaseComObject(rangeCell);
-                }
+                if (values.Count > 0)
+                    return values;
             }
+            catch {
+            }
+            finally {
+                ReleaseComObject(evaluatedValue);
+                evaluatedValue = null;
+            }
+
+            application = worksheet.Application;
+            evaluatedValue = application.Evaluate(formula);
+
+            return ExtractValidationValues(evaluatedValue);
+        }
+        catch {
+            return [];
+        }
+        finally {
+            ReleaseComObject(evaluatedValue);
+            ReleaseComObject(application);
+        }
+    }
+
+    private static List<string> ReadRangeValidationValues(
+        string reference,
+        object worksheetObject) {
+        dynamic worksheet = worksheetObject;
+        dynamic? range = null;
+
+        try {
+            range = worksheet.Range[reference];
+            var values = ExtractValidationValues(range);
+
+            if (values.Count > 0)
+                return values;
         }
         catch {
         }
         finally {
-            ReleaseComObject(cells);
             ReleaseComObject(range);
+            range = null;
+        }
+
+        foreach (var expression in BuildEvaluationExpressions(reference)) {
+            var values = ReadEvaluatedValidationValues(expression, worksheetObject);
+
+            if (values.Count > 0)
+                return values;
+        }
+
+        return [];
+    }
+
+    private static List<string> ReadFormControlValues(
+        object controlFormatObject,
+        object worksheetObject) {
+        dynamic controlFormat = controlFormatObject;
+        var values = ReadControlFillRangeValues(controlFormatObject, worksheetObject);
+
+        if (values.Count > 0)
+            return values;
+
+        try {
+            var count = Convert.ToInt32(controlFormat.ListCount);
+
+            for (var index = 1; index <= count; index++)
+                AddDropdownValue(values, Convert.ToString(controlFormat.List[index]));
+        }
+        catch {
         }
 
         return values;
+    }
+
+    private static List<string> ReadActiveXValues(
+        object embeddedObjectObject,
+        object controlObject,
+        object worksheetObject) {
+        var values = ReadControlFillRangeValues(embeddedObjectObject, worksheetObject);
+
+        if (values.Count > 0)
+            return values;
+
+        values = ReadControlFillRangeValues(controlObject, worksheetObject);
+
+        if (values.Count > 0)
+            return values;
+
+        dynamic control = controlObject;
+
+        try {
+            values = ExtractValidationValues(control.List);
+
+            if (values.Count > 0)
+                return values;
+        }
+        catch {
+        }
+
+        try {
+            var count = Convert.ToInt32(control.ListCount);
+
+            for (var index = 0; index < count; index++)
+                AddDropdownValue(values, Convert.ToString(control.List[index]));
+        }
+        catch {
+        }
+
+        return values;
+    }
+
+    private static List<string> ReadControlFillRangeValues(
+        object controlObject,
+        object worksheetObject) {
+        dynamic control = controlObject;
+
+        try {
+            var fillRange = Convert.ToString(control.ListFillRange);
+            return ReadDropdownSourceValues(fillRange, worksheetObject);
+        }
+        catch {
+            return [];
+        }
+    }
+
+    private static string? ReadSelectedFormControlValue(
+        object controlFormatObject,
+        IReadOnlyList<string> values) {
+        dynamic controlFormat = controlFormatObject;
+
+        try {
+            var selectedIndex = Convert.ToInt32(controlFormat.Value);
+
+            return selectedIndex > 0 && selectedIndex <= values.Count
+                ? values[selectedIndex - 1]
+                : null;
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private static string? ReadActiveXSelectedValue(object controlObject) {
+        dynamic control = controlObject;
+
+        try {
+            return Convert.ToString(control.Value);
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private static (int Row, int Column)? ReadLinkedCellPosition(
+        object controlObject,
+        object worksheetObject) {
+        dynamic control = controlObject;
+        dynamic worksheet = worksheetObject;
+        dynamic? linkedCell = null;
+
+        try {
+            var linkedCellReference = Convert.ToString(control.LinkedCell);
+
+            if (string.IsNullOrWhiteSpace(linkedCellReference))
+                return null;
+
+            linkedCell = worksheet.Range[linkedCellReference];
+
+            return (
+                Convert.ToInt32(linkedCell.Row),
+                Convert.ToInt32(linkedCell.Column));
+        }
+        catch {
+            return null;
+        }
+        finally {
+            ReleaseComObject(linkedCell);
+        }
+    }
+
+    private static void ApplyDropdownValues(
+        CellModel model,
+        IEnumerable<string> values,
+        string? selectedValue,
+        (int Row, int Column)? inputTarget,
+        bool dropdownWritesSelectedIndex) {
+        model.IsInput = true;
+        model.InputType = CellInputType.ComboBox;
+        model.DropdownValues = values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.CurrentCulture)
+            .ToList();
+
+        model.InputTargetRow = inputTarget?.Row;
+        model.InputTargetColumn = inputTarget?.Column;
+        model.DropdownWritesSelectedIndex = dropdownWritesSelectedIndex;
+
+        if (!string.IsNullOrWhiteSpace(selectedValue))
+            model.DisplayText = selectedValue;
+    }
+
+    private static List<string> ExtractValidationValues(object? source) {
+        var values = new List<string>();
+
+        if (source == null)
+            return values;
+
+        if (Marshal.IsComObject(source)) {
+            dynamic range = source;
+
+            try {
+                return ExtractValidationValues(range.Value2);
+            }
+            catch {
+                return values;
+            }
+        }
+
+        if (source is Array array) {
+            foreach (var item in array)
+                AddDropdownValue(values, Convert.ToString(item));
+
+            return values;
+        }
+
+        AddDropdownValue(values, Convert.ToString(source));
+
+        return values;
+    }
+
+    private static void AddDropdownValue(List<string> values, string? value) {
+        var normalizedValue = value?.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedValue))
+            return;
+
+        if (!values.Contains(normalizedValue, StringComparer.CurrentCulture))
+            values.Add(normalizedValue);
+    }
+
+    private static bool IsInsideRenderedSheet(int row, int column, SheetModel model) {
+        return row >= model.FirstRow &&
+               row <= model.MaxRow &&
+               column >= model.FirstColumn &&
+               column <= model.MaxColumn;
     }
 
     private static string ToHex(Color color) {

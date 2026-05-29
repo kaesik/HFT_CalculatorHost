@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -7,8 +8,16 @@ using CalculatorHost.Models;
 namespace CalculatorHost.Rendering;
 
 public sealed class RenderedSheet {
-    public Canvas Canvas { get; init; } = new();
-    public Dictionary<(int Row, int Column), FrameworkElement> CellElements { get; } = [];
+    public RenderedSheet(Canvas canvas) {
+        Canvas = canvas;
+    }
+
+    internal Dictionary<(int Row, int Column), TextBlock> ReadOnlyControls { get; } = [];
+    internal Dictionary<(int Row, int Column), TextBox> TextBoxControls { get; } = [];
+    internal Dictionary<(int Row, int Column), ComboBox> ComboBoxControls { get; } = [];
+    internal bool IsUpdatingValues { get; set; }
+
+    public Canvas Canvas { get; }
 }
 
 public class SheetRenderer {
@@ -35,14 +44,14 @@ public class SheetRenderer {
             ? height
             : sheet.DefaultRowHeight;
 
-        var renderedSheet = new RenderedSheet {
-            Canvas = new Canvas {
-                Width = totalWidth,
-                Height = totalHeight,
-                Background = Brushes.White,
-                SnapsToDevicePixels = true
-            }
+        var canvas = new Canvas {
+            Width = totalWidth,
+            Height = totalHeight,
+            Background = Brushes.White,
+            SnapsToDevicePixels = true
         };
+
+        var renderedSheet = new RenderedSheet(canvas);
 
         foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
             if (!columnPositions.TryGetValue(cell.Column, out var cellX)) continue;
@@ -62,52 +71,61 @@ public class SheetRenderer {
 
             if (cellWidth < MinimumCellSize || cellHeight < MinimumCellSize) continue;
 
-            var element = CreateCellElement(cell, cellWidth, cellHeight, onInputChanged);
+            var element = CreateCellElement(
+                renderedSheet,
+                cell,
+                cellWidth,
+                cellHeight,
+                onInputChanged);
 
             Canvas.SetLeft(element, cellX);
             Canvas.SetTop(element, cellY);
-            renderedSheet.Canvas.Children.Add(element);
-            renderedSheet.CellElements[(cell.Row, cell.Column)] = element;
+            canvas.Children.Add(element);
         }
 
         return renderedSheet;
     }
 
     public static void UpdateCellValues(RenderedSheet renderedSheet, SheetModel sheet) {
-        foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
-            if (!renderedSheet.CellElements.TryGetValue((cell.Row, cell.Column), out var element))
-                continue;
-
-            if (element is not Border border)
-                continue;
-
-            switch (border.Child) {
-                case TextBlock textBlock:
-                    if (textBlock.Text != cell.DisplayText)
-                        textBlock.Text = cell.DisplayText;
-                    break;
-                case TextBox textBox:
-                    if (textBox.Text != cell.DisplayText)
-                        textBox.Text = cell.DisplayText;
-                    break;
-                case ComboBox comboBox:
-                    UpdateComboBoxValue(comboBox, cell.DisplayText);
-                    break;
-            }
-        }
-    }
-
-    private static void UpdateComboBoxValue(ComboBox comboBox, string value) {
-        if (Equals(comboBox.SelectedItem, value))
-            return;
-
-        comboBox.Tag = true;
+        renderedSheet.IsUpdatingValues = true;
 
         try {
-            comboBox.SelectedItem = value;
+            foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
+                var coordinate = (cell.Row, cell.Column);
+
+                if (renderedSheet.ReadOnlyControls.TryGetValue(coordinate, out var textBlock)) {
+                    if (!string.Equals(textBlock.Text, cell.DisplayText, StringComparison.Ordinal))
+                        textBlock.Text = cell.DisplayText;
+
+                    continue;
+                }
+
+                if (renderedSheet.TextBoxControls.TryGetValue(coordinate, out var textBox)) {
+                    if (!textBox.IsKeyboardFocusWithin &&
+                        !string.Equals(textBox.Text, cell.DisplayText, StringComparison.Ordinal))
+                        textBox.Text = cell.DisplayText;
+
+                    continue;
+                }
+
+                if (!renderedSheet.ComboBoxControls.TryGetValue(coordinate, out var comboBox))
+                    continue;
+
+                if (!ReferenceEquals(comboBox.ItemsSource, cell.DropdownValues))
+                    comboBox.ItemsSource = cell.DropdownValues;
+
+                var selectedValue = cell.DropdownValues.FirstOrDefault(value =>
+                    string.Equals(value, cell.DisplayText, StringComparison.CurrentCulture));
+
+                if (selectedValue != null) {
+                    if (!Equals(comboBox.SelectedItem, selectedValue))
+                        comboBox.SelectedItem = selectedValue;
+                }
+                else if (comboBox.SelectedIndex != -1) comboBox.SelectedIndex = -1;
+            }
         }
         finally {
-            comboBox.Tag = null;
+            renderedSheet.IsUpdatingValues = false;
         }
     }
 
@@ -141,10 +159,15 @@ public class SheetRenderer {
     }
 
     private static FrameworkElement CreateCellElement(
+        RenderedSheet renderedSheet,
         CellModel cell,
         double width,
         double height,
         Action<int, int, string> onInputChanged) {
+        var content = cell.IsInput
+            ? CreateInputControl(renderedSheet, cell, onInputChanged)
+            : CreateReadOnlyControl(renderedSheet, cell);
+
         return new Border {
             Width = width,
             Height = height,
@@ -157,14 +180,14 @@ public class SheetRenderer {
                 cell.BorderBottomThickness),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true,
-            Child = cell.IsInput
-                ? CreateInputControl(cell, onInputChanged)
-                : CreateReadOnlyControl(cell)
+            Child = content
         };
     }
 
-    private static FrameworkElement CreateReadOnlyControl(CellModel cell) {
-        return new TextBlock {
+    private static FrameworkElement CreateReadOnlyControl(
+        RenderedSheet renderedSheet,
+        CellModel cell) {
+        var textBlock = new TextBlock {
             Text = cell.DisplayText,
             FontSize = Math.Max(cell.FontSize, 7.0),
             FontWeight = cell.IsBold ? FontWeights.Bold : FontWeights.Normal,
@@ -177,18 +200,23 @@ public class SheetRenderer {
             Padding = new Thickness(3, 1, 3, 1),
             IsHitTestVisible = false
         };
+
+        renderedSheet.ReadOnlyControls[(cell.Row, cell.Column)] = textBlock;
+        return textBlock;
     }
 
     private static FrameworkElement CreateInputControl(
+        RenderedSheet renderedSheet,
         CellModel cell,
         Action<int, int, string> onInputChanged) {
         if (cell.InputType == CellInputType.ComboBox && cell.DropdownValues.Count > 0)
-            return CreateComboBoxInput(cell, onInputChanged);
+            return CreateComboBoxInput(renderedSheet, cell, onInputChanged);
 
-        return CreateTextBoxInput(cell, onInputChanged);
+        return CreateTextBoxInput(renderedSheet, cell, onInputChanged);
     }
 
     private static TextBox CreateTextBoxInput(
+        RenderedSheet renderedSheet,
         CellModel cell,
         Action<int, int, string> onInputChanged) {
         var textBox = new TextBox {
@@ -230,16 +258,19 @@ public class SheetRenderer {
             }
         };
 
+        renderedSheet.TextBoxControls[(cell.Row, cell.Column)] = textBox;
         return textBox;
     }
 
     private static ComboBox CreateComboBoxInput(
+        RenderedSheet renderedSheet,
         CellModel cell,
         Action<int, int, string> onInputChanged) {
         var comboBox = new ComboBox {
             ItemsSource = cell.DropdownValues,
             FontSize = Math.Max(cell.FontSize, 7.0),
             FontWeight = cell.IsBold ? FontWeights.Bold : FontWeights.Normal,
+            Foreground = new SolidColorBrush(cell.ForegroundColor),
             VerticalAlignment = VerticalAlignment.Stretch,
             VerticalContentAlignment = cell.VerticalContentAlignment,
             Padding = new Thickness(2, 0, 2, 0),
@@ -248,17 +279,29 @@ public class SheetRenderer {
             IsEditable = false
         };
 
-        if (cell.DropdownValues.Contains(cell.DisplayText))
-            comboBox.SelectedItem = cell.DisplayText;
+        var selectedDisplayValue = cell.DropdownValues.FirstOrDefault(value =>
+            string.Equals(value, cell.DisplayText, StringComparison.CurrentCulture));
+
+        if (selectedDisplayValue != null)
+            comboBox.SelectedItem = selectedDisplayValue;
 
         comboBox.SelectionChanged += (_, _) => {
-            if (comboBox.Tag is true)
+            if (renderedSheet.IsUpdatingValues)
                 return;
 
-            if (comboBox.SelectedItem is string selectedValue)
-                onInputChanged(cell.Row, cell.Column, selectedValue);
+            if (comboBox.SelectedItem is not string selectedValue)
+                return;
+
+            var inputRow = cell.InputTargetRow ?? cell.Row;
+            var inputColumn = cell.InputTargetColumn ?? cell.Column;
+            var inputValue = cell.DropdownWritesSelectedIndex
+                ? (comboBox.SelectedIndex + 1).ToString(CultureInfo.InvariantCulture)
+                : selectedValue;
+
+            onInputChanged(inputRow, inputColumn, inputValue);
         };
 
+        renderedSheet.ComboBoxControls[(cell.Row, cell.Column)] = comboBox;
         return comboBox;
     }
 }

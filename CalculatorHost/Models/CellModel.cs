@@ -40,4 +40,7 @@ public class CellModel {
     public bool IsInput { get; set; }
     public CellInputType InputType { get; set; } = CellInputType.None;
     public List<string> DropdownValues { get; set; } = [];
+    public int? InputTargetRow { get; set; }
+    public int? InputTargetColumn { get; set; }
+    public bool DropdownWritesSelectedIndex { get; set; }
 }
