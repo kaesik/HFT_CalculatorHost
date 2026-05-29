@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CalculatorHost.Models;
 
 namespace CalculatorHost.Rendering;
@@ -36,19 +38,28 @@ public class SheetRenderer {
             sheet.RowHeights,
             sheet.DefaultRowHeight);
 
-        var totalWidth = columnPositions.TryGetValue(sheet.MaxColumn + 1, out var width)
+        var cellContentWidth = columnPositions.TryGetValue(sheet.MaxColumn + 1, out var width)
             ? width
             : sheet.DefaultColumnWidth;
 
-        var totalHeight = rowPositions.TryGetValue(sheet.MaxRow + 1, out var height)
+        var cellContentHeight = rowPositions.TryGetValue(sheet.MaxRow + 1, out var height)
             ? height
             : sheet.DefaultRowHeight;
 
+        var imageContentWidth = sheet.Images.Count == 0
+            ? 0.0
+            : sheet.Images.Max(image => image.Left + image.Width);
+
+        var imageContentHeight = sheet.Images.Count == 0
+            ? 0.0
+            : sheet.Images.Max(image => image.Top + image.Height);
+
         var canvas = new Canvas {
-            Width = totalWidth,
-            Height = totalHeight,
+            Width = Math.Max(cellContentWidth, imageContentWidth),
+            Height = Math.Max(cellContentHeight, imageContentHeight),
             Background = Brushes.White,
-            SnapsToDevicePixels = true
+            SnapsToDevicePixels = true,
+            ClipToBounds = true
         };
 
         var renderedSheet = new RenderedSheet(canvas);
@@ -81,6 +92,18 @@ public class SheetRenderer {
             Canvas.SetLeft(element, cellX);
             Canvas.SetTop(element, cellY);
             canvas.Children.Add(element);
+        }
+
+        foreach (var imageModel in sheet.Images.OrderBy(image => image.ZIndex)) {
+            var image = CreateImageElement(imageModel);
+
+            if (image == null)
+                continue;
+
+            Canvas.SetLeft(image, imageModel.Left);
+            Canvas.SetTop(image, imageModel.Top);
+            Panel.SetZIndex(image, 1000 + imageModel.ZIndex);
+            canvas.Children.Add(image);
         }
 
         return renderedSheet;
@@ -182,6 +205,32 @@ public class SheetRenderer {
             UseLayoutRounding = true,
             Child = content
         };
+    }
+
+    private static Image? CreateImageElement(SheetImageModel imageModel) {
+        try {
+            using var stream = new MemoryStream(imageModel.ImageBytes, false);
+
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = stream;
+            bitmap.EndInit();
+            bitmap.Freeze();
+
+            return new Image {
+                Width = imageModel.Width,
+                Height = imageModel.Height,
+                Source = bitmap,
+                Stretch = Stretch.Fill,
+                IsHitTestVisible = false,
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true
+            };
+        }
+        catch {
+            return null;
+        }
     }
 
     private static FrameworkElement CreateReadOnlyControl(

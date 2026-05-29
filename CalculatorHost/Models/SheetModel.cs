@@ -3,6 +3,7 @@ namespace CalculatorHost.Models;
 public class SheetModel {
     public string SheetName { get; init; } = string.Empty;
     public List<CellModel> Cells { get; set; } = [];
+    public List<SheetImageModel> Images { get; set; } = [];
     public Dictionary<int, double> ColumnWidths { get; set; } = new();
     public Dictionary<int, double> RowHeights { get; set; } = new();
     public int FirstRow { get; init; } = 1;

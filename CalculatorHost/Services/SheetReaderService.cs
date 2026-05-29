@@ -1,6 +1,8 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
@@ -25,6 +27,14 @@ public class SheetReaderService {
     private const int ExcelReferenceStyleA1 = 1;
     private const int ExcelReferenceTypeAbsolute = 1;
     private const int ExcelShapeTypeFormControl = 8;
+    private const int ExcelShapeTypeLinkedPicture = 11;
+    private const int ExcelShapeTypePicture = 13;
+    private const int ExcelShapeTypeGraphic = 28;
+    private const int ExcelShapeTypeLinkedGraphic = 29;
+    private const int ExcelCopyPictureAppearanceScreen = 1;
+    private const int ExcelCopyPictureFormatBitmap = 2;
+    private const int MaximumClipboardReadAttempts = 5;
+    private const int ClipboardRetryDelayMilliseconds = 20;
     private const int ExcelFormControlTypeDropdown = 2;
     private const int ExcelFormControlTypeListBox = 6;
     private const int ExcelCellControlTypeNone = 0;
@@ -90,6 +100,7 @@ public class SheetReaderService {
             ReadRowHeights((object)worksheet, model);
             ReadCells((object)worksheet, model);
             ReadDropdownElements((object)worksheet, model);
+            ReadImages((object)worksheet, model);
 
             return model;
         }
@@ -136,6 +147,9 @@ public class SheetReaderService {
             }
 
             ReadDropdownElements((object)worksheet, model);
+
+            if (model.Images.Count == 0)
+                ReadImages((object)worksheet, model);
 
             return model;
         }
@@ -1122,7 +1136,7 @@ public class SheetReaderService {
             return formula;
         }
         finally {
-            ReleaseComObject(application);
+            application = null;
         }
     }
 
@@ -1189,7 +1203,7 @@ public class SheetReaderService {
         }
         finally {
             ReleaseComObject(evaluatedValue);
-            ReleaseComObject(application);
+            application = null;
         }
     }
 
@@ -1415,6 +1429,122 @@ public class SheetReaderService {
                row <= model.MaxRow &&
                column >= model.FirstColumn &&
                column <= model.MaxColumn;
+    }
+
+    private static void ReadImages(object worksheetObject, SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic? shapes = null;
+        dynamic? cells = null;
+        dynamic? originCell = null;
+
+        try {
+            shapes = worksheet.Shapes;
+
+            var shapeCount = Convert.ToInt32(shapes.Count);
+
+            if (shapeCount == 0)
+                return;
+
+            cells = worksheet.Cells;
+            originCell = cells[model.FirstRow, model.FirstColumn];
+
+            var originLeft = Convert.ToDouble(originCell.Left) * PointsToDips;
+            var originTop = Convert.ToDouble(originCell.Top) * PointsToDips;
+
+            for (var index = 1; index <= shapeCount; index++) {
+                dynamic? shape = null;
+
+                try {
+                    shape = shapes.Item(index);
+
+                    if (!IsRenderablePicture((object)shape))
+                        continue;
+
+                    var imageBytes = TryCopyShapeAsPngFromClipboard((object)shape);
+
+                    if (imageBytes == null || imageBytes.Length == 0)
+                        continue;
+
+                    model.Images.Add(new SheetImageModel {
+                        Name = Convert.ToString(shape.Name) ?? string.Empty,
+                        ImageBytes = imageBytes,
+                        Left = Convert.ToDouble(shape.Left) * PointsToDips - originLeft,
+                        Top = Convert.ToDouble(shape.Top) * PointsToDips - originTop,
+                        Width = Math.Max(Convert.ToDouble(shape.Width) * PointsToDips, 1.0),
+                        Height = Math.Max(Convert.ToDouble(shape.Height) * PointsToDips, 1.0),
+                        ZIndex = index
+                    });
+                }
+                catch {
+                }
+                finally {
+                    ReleaseComObject(shape);
+                }
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(originCell);
+            ReleaseComObject(cells);
+            ReleaseComObject(shapes);
+        }
+    }
+
+    private static bool IsRenderablePicture(object shapeObject) {
+        dynamic shape = shapeObject;
+
+        try {
+            if (!Convert.ToBoolean(shape.Visible))
+                return false;
+        }
+        catch {
+        }
+
+        try {
+            var shapeType = Convert.ToInt32(shape.Type);
+
+            return shapeType is ExcelShapeTypeLinkedPicture
+                or ExcelShapeTypePicture
+                or ExcelShapeTypeGraphic
+                or ExcelShapeTypeLinkedGraphic;
+        }
+        catch {
+            return false;
+        }
+    }
+
+    private static byte[]? TryCopyShapeAsPngFromClipboard(object shapeObject) {
+        dynamic shape = shapeObject;
+
+        try {
+            shape.CopyPicture(
+                ExcelCopyPictureAppearanceScreen,
+                ExcelCopyPictureFormatBitmap);
+
+            for (var attempt = 0; attempt < MaximumClipboardReadAttempts; attempt++) {
+                try {
+                    var bitmap = Clipboard.GetImage();
+
+                    if (bitmap != null) {
+                        var encoder = new PngBitmapEncoder();
+                        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+
+                        using var stream = new MemoryStream();
+                        encoder.Save(stream);
+                        return stream.ToArray();
+                    }
+                }
+                catch {
+                }
+
+                Thread.Sleep(ClipboardRetryDelayMilliseconds);
+            }
+        }
+        catch {
+        }
+
+        return null;
     }
 
     private static string ToHex(Color color) {
