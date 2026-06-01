@@ -348,7 +348,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             var macroStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
                 WritePendingValues(pendingValues);
-                _excelSession.RunMacro(config.MacroName);
+                _excelSession.RunMacroButton(config);
             });
             macroStopwatch.Stop();
 

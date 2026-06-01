@@ -25,7 +25,8 @@ public sealed class RenderedSheet {
 public class SheetRenderer {
     private const double MinimumCellSize = 2.0;
 
-    public static RenderedSheet RenderSheet(SheetModel sheet, Action<int, int, string> onInputChanged) {
+    public static RenderedSheet RenderSheet(SheetModel sheet, Action<int, int, string> onInputChanged,
+        Action<MacroButtonConfig>? onMacroButtonClicked = null) {
         var columnPositions = CalculatePositions(
             sheet.FirstColumn,
             sheet.MaxColumn,
@@ -54,9 +55,17 @@ public class SheetRenderer {
             ? 0.0
             : sheet.Images.Max(image => image.Top + image.Height);
 
+        var macroButtonContentWidth = sheet.MacroButtons.Count == 0
+            ? 0.0
+            : sheet.MacroButtons.Max(button => button.Left + button.Width);
+
+        var macroButtonContentHeight = sheet.MacroButtons.Count == 0
+            ? 0.0
+            : sheet.MacroButtons.Max(button => button.Top + button.Height);
+
         var canvas = new Canvas {
-            Width = Math.Max(cellContentWidth, imageContentWidth),
-            Height = Math.Max(cellContentHeight, imageContentHeight),
+            Width = Math.Max(Math.Max(cellContentWidth, imageContentWidth), macroButtonContentWidth),
+            Height = Math.Max(Math.Max(cellContentHeight, imageContentHeight), macroButtonContentHeight),
             Background = Brushes.White,
             SnapsToDevicePixels = true,
             ClipToBounds = true
@@ -105,6 +114,17 @@ public class SheetRenderer {
             Panel.SetZIndex(image, 1000 + imageModel.ZIndex);
             canvas.Children.Add(image);
         }
+
+        if (onMacroButtonClicked != null)
+            foreach (var macroButton in sheet.MacroButtons.Where(button => button.IsSheetButton)
+                         .OrderBy(button => button.ZIndex)) {
+                var button = CreateMacroButtonElement(macroButton, onMacroButtonClicked);
+
+                Canvas.SetLeft(button, macroButton.Left);
+                Canvas.SetTop(button, macroButton.Top);
+                Panel.SetZIndex(button, 2000 + macroButton.ZIndex);
+                canvas.Children.Add(button);
+            }
 
         return renderedSheet;
     }
@@ -231,6 +251,32 @@ public class SheetRenderer {
         catch {
             return null;
         }
+    }
+
+    private static Button CreateMacroButtonElement(
+        MacroButtonConfig macroButton,
+        Action<MacroButtonConfig> onMacroButtonClicked) {
+        var fallbackLabel = !string.IsNullOrWhiteSpace(macroButton.ShapeName)
+            ? macroButton.ShapeName
+            : macroButton.OleObjectName;
+
+        var button = new Button {
+            Width = Math.Max(macroButton.Width, MinimumCellSize),
+            Height = Math.Max(macroButton.Height, MinimumCellSize),
+            Content = string.IsNullOrWhiteSpace(macroButton.Label)
+                ? fallbackLabel
+                : macroButton.Label,
+            ToolTip = string.IsNullOrWhiteSpace(macroButton.Tooltip)
+                ? $"Uruchamia makro: {macroButton.MacroName}"
+                : macroButton.Tooltip,
+            Padding = new Thickness(4, 1, 4, 1),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+
+        button.Click += (_, _) => onMacroButtonClicked(macroButton);
+
+        return button;
     }
 
     private static FrameworkElement CreateReadOnlyControl(

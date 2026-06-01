@@ -54,7 +54,8 @@ public partial class CalculatorView {
 
         _renderedSheet = SheetRenderer.RenderSheet(
             sheetModel,
-            OnInputChanged);
+            OnInputChanged,
+            OnMacroButtonClicked);
 
         _renderedSheetModel = sheetModel;
         SheetScrollViewer.Content = _renderedSheet.Canvas;
@@ -100,6 +101,11 @@ public partial class CalculatorView {
 
             MacroButtonsPanel.Children.Add(button);
         }
+    }
+
+    private void OnMacroButtonClicked(MacroButtonConfig macroButton) {
+        if (_viewModel.RunMacroCommand.CanExecute(macroButton))
+            _viewModel.RunMacroCommand.Execute(macroButton);
     }
 
     private void OnInputChanged(int row, int column, string value) {

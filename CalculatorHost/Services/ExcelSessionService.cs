@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
 
@@ -86,11 +87,81 @@ public class ExcelSessionService : IDisposable {
         if (string.IsNullOrWhiteSpace(macroName))
             throw new InvalidOperationException("Nie podano nazwy makra.");
 
-        var workbookName = Convert.ToString(_workbook.Name) ?? string.Empty;
-        var workbookMacroName = $"'{workbookName.Replace("'", "''")}'!{macroName}";
+        var normalizedMacroName = macroName.Trim();
+        var macroToRun = normalizedMacroName.Contains('!')
+            ? normalizedMacroName
+            : $"'{(Convert.ToString(_workbook.Name) ?? string.Empty).Replace("'", "''")}'!{normalizedMacroName}";
 
-        _application.Run(workbookMacroName);
+        _application.Run(macroToRun);
         _application.Calculate();
+    }
+
+    public void RunMacroButton(MacroButtonConfig config) {
+        if (_application == null || _workbook == null)
+            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+
+        if (config.ActionType == MacroButtonActionType.ActiveXClick) {
+            ClickActiveXButton(config);
+            _application.Calculate();
+            return;
+        }
+
+        RunMacro(config.MacroName);
+    }
+
+    private void ClickActiveXButton(MacroButtonConfig config) {
+        if (_application == null || _workbook == null)
+            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+
+        if (string.IsNullOrWhiteSpace(config.OleObjectName))
+            throw new InvalidOperationException("Nie podano nazwy przycisku ActiveX.");
+
+        dynamic? worksheets = null;
+        dynamic? worksheet = null;
+        dynamic? oleObjects = null;
+        dynamic? oleObject = null;
+        dynamic? control = null;
+        object? previousEnableEvents = null;
+
+        try {
+            worksheets = _workbook.Worksheets;
+            worksheet = string.IsNullOrWhiteSpace(config.SheetName)
+                ? worksheets[1]
+                : worksheets[config.SheetName];
+
+            oleObjects = worksheet.OLEObjects();
+            oleObject = oleObjects.Item(config.OleObjectName);
+            control = oleObject.Object;
+
+            try {
+                previousEnableEvents = _application.EnableEvents;
+                _application.EnableEvents = true;
+            }
+            catch {
+            }
+
+            try {
+                control.Value = true;
+                control.Value = false;
+            }
+            catch {
+                control.Value = true;
+            }
+        }
+        finally {
+            if (previousEnableEvents != null)
+                try {
+                    _application.EnableEvents = previousEnableEvents;
+                }
+                catch {
+                }
+
+            ReleaseComObject(control);
+            ReleaseComObject(oleObject);
+            ReleaseComObject(oleObjects);
+            ReleaseComObject(worksheet);
+            ReleaseComObject(worksheets);
+        }
     }
 
     public void Recalculate() {
