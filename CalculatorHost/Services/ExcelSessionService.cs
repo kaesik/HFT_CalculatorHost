@@ -87,81 +87,28 @@ public class ExcelSessionService : IDisposable {
         if (string.IsNullOrWhiteSpace(macroName))
             throw new InvalidOperationException("Nie podano nazwy makra.");
 
-        var normalizedMacroName = macroName.Trim();
-        var macroToRun = normalizedMacroName.Contains('!')
-            ? normalizedMacroName
-            : $"'{(Convert.ToString(_workbook.Name) ?? string.Empty).Replace("'", "''")}'!{normalizedMacroName}";
+        var macroToRun = macroName.Trim();
+
+        if (!macroToRun.Contains('!')) {
+            var workbookName = Convert.ToString(_workbook.Name) ?? string.Empty;
+            macroToRun = $"'{workbookName.Replace("'", "''")}'!{macroToRun}";
+        }
 
         _application.Run(macroToRun);
         _application.Calculate();
     }
 
     public void RunMacroButton(MacroButtonConfig config) {
-        if (_application == null || _workbook == null)
-            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+        if (config == null)
+            throw new InvalidOperationException("Nie podano konfiguracji przycisku makra.");
 
-        if (config.ActionType == MacroButtonActionType.ActiveXClick) {
-            ClickActiveXButton(config);
-            _application.Calculate();
+        if (config.IsActiveXCommandButton && !string.IsNullOrWhiteSpace(config.OleObjectName)) {
+            RunActiveXCommandButton(config.OleObjectName);
+            Recalculate();
             return;
         }
 
         RunMacro(config.MacroName);
-    }
-
-    private void ClickActiveXButton(MacroButtonConfig config) {
-        if (_application == null || _workbook == null)
-            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
-
-        if (string.IsNullOrWhiteSpace(config.OleObjectName))
-            throw new InvalidOperationException("Nie podano nazwy przycisku ActiveX.");
-
-        dynamic? worksheets = null;
-        dynamic? worksheet = null;
-        dynamic? oleObjects = null;
-        dynamic? oleObject = null;
-        dynamic? control = null;
-        object? previousEnableEvents = null;
-
-        try {
-            worksheets = _workbook.Worksheets;
-            worksheet = string.IsNullOrWhiteSpace(config.SheetName)
-                ? worksheets[1]
-                : worksheets[config.SheetName];
-
-            oleObjects = worksheet.OLEObjects();
-            oleObject = oleObjects.Item(config.OleObjectName);
-            control = oleObject.Object;
-
-            try {
-                previousEnableEvents = _application.EnableEvents;
-                _application.EnableEvents = true;
-            }
-            catch {
-            }
-
-            try {
-                control.Value = true;
-                control.Value = false;
-            }
-            catch {
-                control.Value = true;
-            }
-        }
-        finally {
-            if (previousEnableEvents != null)
-                try {
-                    _application.EnableEvents = previousEnableEvents;
-                }
-                catch {
-                }
-
-            ReleaseComObject(control);
-            ReleaseComObject(oleObject);
-            ReleaseComObject(oleObjects);
-            ReleaseComObject(worksheet);
-            ReleaseComObject(worksheets);
-        }
     }
 
     public void Recalculate() {
@@ -248,6 +195,55 @@ public class ExcelSessionService : IDisposable {
         }
         finally {
             ReleaseComObject(workbooks);
+        }
+    }
+
+    private void RunActiveXCommandButton(string oleObjectName) {
+        if (_application == null || _workbook == null)
+            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+
+        dynamic? worksheet = null;
+        dynamic? objects = null;
+        dynamic? embeddedObject = null;
+        dynamic? control = null;
+
+        try {
+            worksheet = GetFirstWorksheet();
+            objects = worksheet.OLEObjects();
+            embeddedObject = objects.Item(oleObjectName);
+            control = embeddedObject.Object;
+
+            try {
+                var codeName = Convert.ToString(worksheet.CodeName) ?? string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(codeName)) {
+                    var clickMacroName = $"{codeName}.{oleObjectName}_Click";
+                    _application.Run(clickMacroName);
+                    return;
+                }
+            }
+            catch {
+            }
+
+            try {
+                control.Value = true;
+            }
+            catch {
+                try {
+                    control.Value = false;
+                    control.Value = true;
+                }
+                catch {
+                    throw new InvalidOperationException(
+                        $"Nie udało się uruchomić przycisku ActiveX '{oleObjectName}'.");
+                }
+            }
+        }
+        finally {
+            ReleaseComObject(control);
+            ReleaseComObject(embeddedObject);
+            ReleaseComObject(objects);
+            ReleaseComObject(worksheet);
         }
     }
 

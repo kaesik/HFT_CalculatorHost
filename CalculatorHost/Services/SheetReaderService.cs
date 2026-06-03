@@ -149,9 +149,7 @@ public class SheetReaderService {
             }
 
             ReadDropdownElements((object)worksheet, model);
-
-            if (model.Images.Count == 0)
-                ReadImages((object)worksheet, model);
+            ReadImages((object)worksheet, model);
             ReadMacroButtons((object)worksheet, model);
 
             return model;
@@ -1434,12 +1432,9 @@ public class SheetReaderService {
                column <= model.MaxColumn;
     }
 
-
     private static void ReadMacroButtons(object worksheetObject, SheetModel model) {
-        model.MacroButtons.Clear();
-
         ReadShapeMacroButtons(worksheetObject, model);
-        ReadActiveXMacroButtons(worksheetObject, model);
+        ReadActiveXCommandButtons(worksheetObject, model);
     }
 
     private static void ReadShapeMacroButtons(object worksheetObject, SheetModel model) {
@@ -1450,7 +1445,6 @@ public class SheetReaderService {
 
         try {
             shapes = worksheet.Shapes;
-
             var shapeCount = Convert.ToInt32(shapes.Count);
 
             if (shapeCount == 0)
@@ -1461,7 +1455,6 @@ public class SheetReaderService {
 
             var originLeft = Convert.ToDouble(originCell.Left) * PointsToDips;
             var originTop = Convert.ToDouble(originCell.Top) * PointsToDips;
-            var sheetName = Convert.ToString(worksheet.Name) ?? string.Empty;
 
             for (var index = 1; index <= shapeCount; index++) {
                 dynamic? shape = null;
@@ -1469,32 +1462,36 @@ public class SheetReaderService {
                 try {
                     shape = shapes.Item(index);
 
-                    if (!IsRenderableMacroShape((object)shape))
+                    if (!Convert.ToBoolean(shape.Visible))
                         continue;
 
-                    var macroName = Convert.ToString(shape.OnAction) ?? string.Empty;
+                    if (IsDropdownFormControl((object)shape))
+                        continue;
+
+                    var macroName = NormalizeMacroName(Convert.ToString(shape.OnAction));
 
                     if (string.IsNullOrWhiteSpace(macroName))
                         continue;
 
-                    var label = ReadShapeText((object)shape);
+                    var left = Convert.ToDouble(shape.Left) * PointsToDips - originLeft;
+                    var top = Convert.ToDouble(shape.Top) * PointsToDips - originTop;
+                    var width = Math.Max(Convert.ToDouble(shape.Width) * PointsToDips, 1.0);
+                    var height = Math.Max(Convert.ToDouble(shape.Height) * PointsToDips, 1.0);
 
-                    if (string.IsNullOrWhiteSpace(label))
-                        label = Convert.ToString(shape.Name) ?? macroName;
+                    if (left + width < 0.0 || top + height < 0.0)
+                        continue;
 
                     model.MacroButtons.Add(new MacroButtonConfig {
-                        Label = label,
+                        Label = ReadShapeText((object)shape),
                         MacroName = macroName,
                         Tooltip = $"Uruchamia makro: {macroName}",
-                        RefreshLayoutAfterRun = true,
-                        ActionType = MacroButtonActionType.Macro,
-                        SheetName = sheetName,
                         ShapeName = Convert.ToString(shape.Name) ?? string.Empty,
-                        Left = Convert.ToDouble(shape.Left) * PointsToDips - originLeft,
-                        Top = Convert.ToDouble(shape.Top) * PointsToDips - originTop,
-                        Width = Math.Max(Convert.ToDouble(shape.Width) * PointsToDips, 12.0),
-                        Height = Math.Max(Convert.ToDouble(shape.Height) * PointsToDips, 12.0),
-                        ZIndex = index
+                        Left = left,
+                        Top = top,
+                        Width = width,
+                        Height = height,
+                        ZIndex = index,
+                        IsSheetButton = true
                     });
                 }
                 catch {
@@ -1513,7 +1510,7 @@ public class SheetReaderService {
         }
     }
 
-    private static void ReadActiveXMacroButtons(object worksheetObject, SheetModel model) {
+    private static void ReadActiveXCommandButtons(object worksheetObject, SheetModel model) {
         dynamic worksheet = worksheetObject;
         dynamic? objects = null;
         dynamic? cells = null;
@@ -1521,7 +1518,6 @@ public class SheetReaderService {
 
         try {
             objects = worksheet.OLEObjects();
-
             var objectCount = Convert.ToInt32(objects.Count);
 
             if (objectCount == 0)
@@ -1532,49 +1528,54 @@ public class SheetReaderService {
 
             var originLeft = Convert.ToDouble(originCell.Left) * PointsToDips;
             var originTop = Convert.ToDouble(originCell.Top) * PointsToDips;
-            var sheetName = Convert.ToString(worksheet.Name) ?? string.Empty;
 
             for (var index = 1; index <= objectCount; index++) {
-                dynamic? oleObject = null;
+                dynamic? embeddedObject = null;
                 dynamic? control = null;
 
                 try {
-                    oleObject = objects.Item(index);
+                    embeddedObject = objects.Item(index);
 
-                    var progId = Convert.ToString(oleObject.ProgID) ?? string.Empty;
-
-                    if (!progId.Contains("CommandButton", StringComparison.OrdinalIgnoreCase))
+                    if (!IsActiveXCommandButton((object)embeddedObject))
                         continue;
 
-                    control = oleObject.Object;
+                    control = embeddedObject.Object;
 
-                    var name = Convert.ToString(oleObject.Name) ?? string.Empty;
-                    var caption = Convert.ToString(control.Caption) ?? string.Empty;
-                    var label = string.IsNullOrWhiteSpace(caption) ? name : caption;
+                    var name = Convert.ToString(embeddedObject.Name) ?? string.Empty;
 
-                    if (string.IsNullOrWhiteSpace(label))
-                        label = $"Makro {index}";
+                    if (string.IsNullOrWhiteSpace(name))
+                        continue;
+
+                    var left = Convert.ToDouble(embeddedObject.Left) * PointsToDips - originLeft;
+                    var top = Convert.ToDouble(embeddedObject.Top) * PointsToDips - originTop;
+                    var width = Math.Max(Convert.ToDouble(embeddedObject.Width) * PointsToDips, 1.0);
+                    var height = Math.Max(Convert.ToDouble(embeddedObject.Height) * PointsToDips, 1.0);
+
+                    if (left + width < 0.0 || top + height < 0.0)
+                        continue;
+
+                    var label = ReadActiveXCaption((object)control);
 
                     model.MacroButtons.Add(new MacroButtonConfig {
-                        Label = label,
+                        Label = string.IsNullOrWhiteSpace(label) ? name : label,
                         MacroName = name,
                         Tooltip = $"Uruchamia przycisk ActiveX: {name}",
-                        RefreshLayoutAfterRun = true,
-                        ActionType = MacroButtonActionType.ActiveXClick,
-                        SheetName = sheetName,
                         OleObjectName = name,
-                        Left = Convert.ToDouble(oleObject.Left) * PointsToDips - originLeft,
-                        Top = Convert.ToDouble(oleObject.Top) * PointsToDips - originTop,
-                        Width = Math.Max(Convert.ToDouble(oleObject.Width) * PointsToDips, 12.0),
-                        Height = Math.Max(Convert.ToDouble(oleObject.Height) * PointsToDips, 12.0),
-                        ZIndex = 10_000 + index
+                        Left = left,
+                        Top = top,
+                        Width = width,
+                        Height = height,
+                        ZIndex = 5000 + index,
+                        IsSheetButton = true,
+                        IsActiveXCommandButton = true,
+                        RefreshLayoutAfterRun = true
                     });
                 }
                 catch {
                 }
                 finally {
                     ReleaseComObject(control);
-                    ReleaseComObject(oleObject);
+                    ReleaseComObject(embeddedObject);
                 }
             }
         }
@@ -1587,39 +1588,46 @@ public class SheetReaderService {
         }
     }
 
-    private static bool IsRenderableMacroShape(object shapeObject) {
+    private static bool IsDropdownFormControl(object shapeObject) {
         dynamic shape = shapeObject;
 
         try {
-            if (!Convert.ToBoolean(shape.Visible))
+            if (Convert.ToInt32(shape.Type) != ExcelShapeTypeFormControl)
                 return false;
-        }
-        catch {
-        }
 
-        try {
-            var onAction = Convert.ToString(shape.OnAction) ?? string.Empty;
+            var controlType = Convert.ToInt32(shape.FormControlType);
 
-            if (string.IsNullOrWhiteSpace(onAction))
-                return false;
+            return controlType == ExcelFormControlTypeDropdown ||
+                   controlType == ExcelFormControlTypeListBox;
         }
         catch {
             return false;
         }
+    }
+
+    private static bool IsActiveXCommandButton(object embeddedObjectObject) {
+        dynamic embeddedObject = embeddedObjectObject;
 
         try {
-            var shapeType = Convert.ToInt32(shape.Type);
+            var progId = Convert.ToString(embeddedObject.ProgId)
+                         ?? Convert.ToString(embeddedObject.progID)
+                         ?? string.Empty;
 
-            if (shapeType != ExcelShapeTypeFormControl)
+            if (progId.Contains("CommandButton", StringComparison.OrdinalIgnoreCase))
                 return true;
-
-            var formControlType = Convert.ToInt32(shape.FormControlType);
-
-            return formControlType != ExcelFormControlTypeDropdown &&
-                   formControlType != ExcelFormControlTypeListBox;
         }
         catch {
-            return true;
+        }
+
+        try {
+            var control = embeddedObject.Object;
+            var caption = Convert.ToString(control.Caption);
+            ReleaseComObject(control);
+
+            return !string.IsNullOrWhiteSpace(caption);
+        }
+        catch {
+            return false;
         }
     }
 
@@ -1645,15 +1653,33 @@ public class SheetReaderService {
         }
 
         try {
-            var text = Convert.ToString(shape.AlternativeText);
+            var text = Convert.ToString(shape.Name);
 
-            if (!string.IsNullOrWhiteSpace(text))
-                return text.Trim();
+            return text?.Trim() ?? string.Empty;
         }
         catch {
+            return string.Empty;
         }
+    }
 
-        return string.Empty;
+    private static string ReadActiveXCaption(object controlObject) {
+        dynamic control = controlObject;
+
+        try {
+            var caption = Convert.ToString(control.Caption);
+
+            return caption?.Trim() ?? string.Empty;
+        }
+        catch {
+            return string.Empty;
+        }
+    }
+
+    private static string NormalizeMacroName(string? macroName) {
+        if (string.IsNullOrWhiteSpace(macroName))
+            return string.Empty;
+
+        return macroName.Trim();
     }
 
     private static void ReadImages(object worksheetObject, SheetModel model) {

@@ -57,11 +57,13 @@ public class SheetRenderer {
 
         var macroButtonContentWidth = sheet.MacroButtons.Count == 0
             ? 0.0
-            : sheet.MacroButtons.Max(button => button.Left + button.Width);
+            : sheet.MacroButtons.Where(button => button.IsSheetButton).DefaultIfEmpty()
+                .Max(button => button?.Left + button?.Width ?? 0.0);
 
         var macroButtonContentHeight = sheet.MacroButtons.Count == 0
             ? 0.0
-            : sheet.MacroButtons.Max(button => button.Top + button.Height);
+            : sheet.MacroButtons.Where(button => button.IsSheetButton).DefaultIfEmpty()
+                .Max(button => button?.Top + button?.Height ?? 0.0);
 
         var canvas = new Canvas {
             Width = Math.Max(Math.Max(cellContentWidth, imageContentWidth), macroButtonContentWidth),
@@ -116,13 +118,14 @@ public class SheetRenderer {
         }
 
         if (onMacroButtonClicked != null)
-            foreach (var macroButton in sheet.MacroButtons.Where(button => button.IsSheetButton)
+            foreach (var macroButton in sheet.MacroButtons
+                         .Where(button => button.IsSheetButton)
                          .OrderBy(button => button.ZIndex)) {
                 var button = CreateMacroButtonElement(macroButton, onMacroButtonClicked);
 
                 Canvas.SetLeft(button, macroButton.Left);
                 Canvas.SetTop(button, macroButton.Top);
-                Panel.SetZIndex(button, 2000 + macroButton.ZIndex);
+                Panel.SetZIndex(button, 3000 + macroButton.ZIndex);
                 canvas.Children.Add(button);
             }
 
@@ -227,6 +230,40 @@ public class SheetRenderer {
         };
     }
 
+    private static Button CreateMacroButtonElement(
+        MacroButtonConfig macroButton,
+        Action<MacroButtonConfig> onMacroButtonClicked) {
+        var fallbackLabel = !string.IsNullOrWhiteSpace(macroButton.ShapeName)
+            ? macroButton.ShapeName
+            : macroButton.OleObjectName;
+
+        var button = new Button {
+            Width = Math.Max(macroButton.Width, MinimumCellSize),
+            Height = Math.Max(macroButton.Height, MinimumCellSize),
+            Content = string.IsNullOrWhiteSpace(macroButton.Label)
+                ? fallbackLabel
+                : macroButton.Label,
+            ToolTip = string.IsNullOrWhiteSpace(macroButton.Tooltip)
+                ? $"Uruchamia makro: {macroButton.MacroName}"
+                : macroButton.Tooltip,
+            Padding = new Thickness(4, 1, 4, 1),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Cursor = Cursors.Hand
+        };
+
+        try {
+            if (Application.Current.TryFindResource("MacroButton") is Style style)
+                button.Style = style;
+        }
+        catch {
+        }
+
+        button.Click += (_, _) => onMacroButtonClicked(macroButton);
+
+        return button;
+    }
+
     private static Image? CreateImageElement(SheetImageModel imageModel) {
         try {
             using var stream = new MemoryStream(imageModel.ImageBytes, false);
@@ -251,32 +288,6 @@ public class SheetRenderer {
         catch {
             return null;
         }
-    }
-
-    private static Button CreateMacroButtonElement(
-        MacroButtonConfig macroButton,
-        Action<MacroButtonConfig> onMacroButtonClicked) {
-        var fallbackLabel = !string.IsNullOrWhiteSpace(macroButton.ShapeName)
-            ? macroButton.ShapeName
-            : macroButton.OleObjectName;
-
-        var button = new Button {
-            Width = Math.Max(macroButton.Width, MinimumCellSize),
-            Height = Math.Max(macroButton.Height, MinimumCellSize),
-            Content = string.IsNullOrWhiteSpace(macroButton.Label)
-                ? fallbackLabel
-                : macroButton.Label,
-            ToolTip = string.IsNullOrWhiteSpace(macroButton.Tooltip)
-                ? $"Uruchamia makro: {macroButton.MacroName}"
-                : macroButton.Tooltip,
-            Padding = new Thickness(4, 1, 4, 1),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-
-        button.Click += (_, _) => onMacroButtonClicked(macroButton);
-
-        return button;
     }
 
     private static FrameworkElement CreateReadOnlyControl(
