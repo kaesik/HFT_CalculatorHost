@@ -61,9 +61,16 @@ public class SheetReaderService {
     private const int ExcelBorderWeightMedium = -4138;
     private const int ExcelBorderWeightThick = 4;
 
-    private const string InputColorLightGreen = "#92D050";
-    private const string InputColorGreen = "#00B050";
-    private const string DropdownColor = "#00B0F0";
+    private const string DefaultInputColor = "#92D050";
+    private const string DefaultSecondInputColor = "#00B050";
+    private const string DefaultDropdownColor = "#00B0F0";
+    private const string DefaultOutputColor = "#FFFFFF";
+
+    private const int RoleColorColumn = 13;
+    private const int InputRoleColorRow = 1;
+    private const int DropdownRoleColorRow = 2;
+    private const int SecondInputRoleColorRow = 3;
+    private const int OutputRoleColorRow = 4;
 
     public SheetModel ReadFirstSheet(ExcelSessionService session) {
         dynamic? worksheet = null;
@@ -97,10 +104,12 @@ public class SheetReaderService {
                 MaxColumn = readBounds.MaximumColumn
             };
 
+            var colorRoles = ReadColorRoles((object)worksheet);
+
             ReadColumnWidths((object)worksheet, model);
             ReadRowHeights((object)worksheet, model);
-            ReadCells((object)worksheet, model);
-            ReadDropdownElements((object)worksheet, model);
+            ReadCells((object)worksheet, model, colorRoles);
+            ReadDropdownElements((object)worksheet, model, colorRoles);
             ReadImages((object)worksheet, model);
             ReadMacroButtons((object)worksheet, model);
 
@@ -148,7 +157,9 @@ public class SheetReaderService {
                 }
             }
 
-            ReadDropdownElements((object)worksheet, model);
+            var colorRoles = ReadColorRoles((object)worksheet);
+
+            ReadDropdownElements((object)worksheet, model, colorRoles);
             ReadImages((object)worksheet, model);
             ReadMacroButtons((object)worksheet, model);
 
@@ -239,6 +250,71 @@ public class SheetReaderService {
         }
     }
 
+    private static CellColorRoles ReadColorRoles(object worksheetObject) {
+        var roles = new CellColorRoles();
+
+        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, InputRoleColorRow, RoleColorColumn) ?? DefaultInputColor);
+        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, SecondInputRoleColorRow, RoleColorColumn) ?? DefaultSecondInputColor);
+        roles.DropdownColors.Add(ReadCellBackgroundHex(worksheetObject, DropdownRoleColorRow, RoleColorColumn) ?? DefaultDropdownColor);
+        roles.OutputColors.Add(ReadCellBackgroundHex(worksheetObject, OutputRoleColorRow, RoleColorColumn) ?? DefaultOutputColor);
+
+        return roles;
+    }
+
+    private static string? ReadCellBackgroundHex(object worksheetObject, int row, int column) {
+        dynamic worksheet = worksheetObject;
+        dynamic? cells = null;
+        dynamic? cell = null;
+
+        try {
+            cells = worksheet.Cells;
+            cell = cells[row, column];
+
+            return ReadCellBackgroundHex((object)cell);
+        }
+        catch {
+            return null;
+        }
+        finally {
+            ReleaseComObject(cell);
+            ReleaseComObject(cells);
+        }
+    }
+
+    private static string? ReadCellBackgroundHex(object cellObject) {
+        dynamic cell = cellObject;
+        dynamic? interior = null;
+
+        try {
+            interior = cell.Interior;
+
+            if (Convert.ToInt32(interior.ColorIndex) == ExcelColorIndexNone)
+                return null;
+
+            return ToHex(OleColorToMediaColor(Convert.ToInt32(interior.Color)));
+        }
+        catch {
+            return null;
+        }
+        finally {
+            ReleaseComObject(interior);
+        }
+    }
+
+    private static bool IsRoleColorDefinitionCell(int row, int column) {
+        return column == RoleColorColumn &&
+               (row == InputRoleColorRow ||
+                row == DropdownRoleColorRow ||
+                row == SecondInputRoleColorRow ||
+                row == OutputRoleColorRow);
+    }
+
+    private static bool IsDropdownRoleCell(object cellObject, CellColorRoles colorRoles) {
+        var colorHex = ReadCellBackgroundHex(cellObject);
+
+        return colorHex != null && colorRoles.DropdownColors.Contains(colorHex);
+    }
+
     private static void ReadColumnWidths(object worksheetObject, SheetModel model) {
         dynamic worksheet = worksheetObject;
         dynamic? columns = null;
@@ -305,7 +381,7 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadCells(object worksheetObject, SheetModel model) {
+    private void ReadCells(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
         dynamic worksheet = worksheetObject;
         var mergedSlaveCells = new HashSet<(int Row, int Column)>();
         dynamic? cells = null;
@@ -342,12 +418,16 @@ public class SheetReaderService {
                     try {
                         cell = cells[row, column];
 
+                        if (IsRoleColorDefinitionCell(row, column))
+                            continue;
+
                         var cellModel = ReadRenderableCell(
                             (object)cell,
                             row,
                             column,
                             worksheetObject,
-                            rawValue);
+                            rawValue,
+                            colorRoles);
 
                         if (cellModel == null)
                             continue;
@@ -371,7 +451,8 @@ public class SheetReaderService {
         int row,
         int column,
         object worksheetObject,
-        object? rawValue) {
+        object? rawValue,
+        CellColorRoles colorRoles) {
         var model = new CellModel {
             Row = row,
             Column = column,
@@ -381,7 +462,7 @@ public class SheetReaderService {
         if (HasBulkContent(rawValue))
             ReadDisplayText(cellObject, model);
 
-        var hasBackground = ReadBackground(cellObject, model);
+        var hasBackground = ReadBackground(cellObject, model, colorRoles);
 
         if (!HasContent(model) && !hasBackground)
             return null;
@@ -468,7 +549,7 @@ public class SheetReaderService {
         }
     }
 
-    private static bool ReadBackground(object cellObject, CellModel model) {
+    private static bool ReadBackground(object cellObject, CellModel model, CellColorRoles colorRoles) {
         dynamic cell = cellObject;
         dynamic? interior = null;
 
@@ -487,12 +568,26 @@ public class SheetReaderService {
 
             var colorHex = ToHex(model.BackgroundColor);
 
-            model.IsInput = colorHex is InputColorLightGreen or InputColorGreen or DropdownColor;
-            model.InputType = colorHex == DropdownColor
-                ? CellInputType.ComboBox
-                : model.IsInput
-                    ? CellInputType.TextBox
-                    : CellInputType.None;
+            if (colorRoles.DropdownColors.Contains(colorHex)) {
+                model.IsInput = true;
+                model.InputType = CellInputType.ComboBox;
+                return true;
+            }
+
+            if (colorRoles.InputColors.Contains(colorHex)) {
+                model.IsInput = true;
+                model.InputType = CellInputType.TextBox;
+                return true;
+            }
+
+            if (colorRoles.OutputColors.Contains(colorHex)) {
+                model.IsInput = false;
+                model.InputType = CellInputType.None;
+                return true;
+            }
+
+            model.IsInput = false;
+            model.InputType = CellInputType.None;
 
             return true;
         }
@@ -626,10 +721,10 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadDropdownElements(object worksheetObject, SheetModel model) {
-        ReadDataValidationDropdowns(worksheetObject, model);
-        ReadFormControlDropdowns(worksheetObject, model);
-        ReadActiveXDropdowns(worksheetObject, model);
+    private void ReadDropdownElements(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
+        ReadDataValidationDropdowns(worksheetObject, model, colorRoles);
+        ReadFormControlDropdowns(worksheetObject, model, colorRoles);
+        ReadActiveXDropdowns(worksheetObject, model, colorRoles);
         ReadCellControlDropdowns(worksheetObject, model);
     }
 
@@ -743,7 +838,7 @@ public class SheetReaderService {
         return [];
     }
 
-    private void ReadDataValidationDropdowns(object worksheetObject, SheetModel model) {
+    private void ReadDataValidationDropdowns(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
         ReadRenderedInputValidations(worksheetObject, model);
 
         dynamic worksheet = worksheetObject;
@@ -768,11 +863,15 @@ public class SheetReaderService {
                     if (!IsInsideRenderedSheet(row, column, model))
                         continue;
 
+                    if (!IsDropdownRoleCell((object)cell, colorRoles))
+                        continue;
+
                     var cellModel = GetOrCreateDropdownCellModel(
                         (object)cell,
                         row,
                         column,
-                        model);
+                        model,
+                        colorRoles);
 
                     ReadValidation((object)cell, cellModel, worksheetObject);
                 }
@@ -798,7 +897,7 @@ public class SheetReaderService {
 
             foreach (var cellModel in model.Cells.Where(cell =>
                          !cell.IsMergedSlave &&
-                         cell.IsInput)) {
+                         cell.InputType == CellInputType.ComboBox)) {
                 dynamic? cell = null;
 
                 try {
@@ -819,7 +918,7 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadFormControlDropdowns(object worksheetObject, SheetModel model) {
+    private void ReadFormControlDropdowns(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
         dynamic worksheet = worksheetObject;
         dynamic? shapes = null;
 
@@ -858,11 +957,15 @@ public class SheetReaderService {
                     if (!IsInsideRenderedSheet(row, column, model))
                         continue;
 
+                    if (!IsDropdownRoleCell((object)topLeftCell, colorRoles))
+                        continue;
+
                     var cellModel = GetOrCreateDropdownCellModel(
                         (object)topLeftCell,
                         row,
                         column,
-                        model);
+                        model,
+                        colorRoles);
 
                     var selectedValue = ReadSelectedFormControlValue((object)controlFormat, values);
                     var inputTarget = ReadLinkedCellPosition((object)controlFormat, worksheetObject);
@@ -890,7 +993,7 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadActiveXDropdowns(object worksheetObject, SheetModel model) {
+    private void ReadActiveXDropdowns(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
         dynamic worksheet = worksheetObject;
         dynamic? objects = null;
 
@@ -923,11 +1026,15 @@ public class SheetReaderService {
                     if (!IsInsideRenderedSheet(row, column, model))
                         continue;
 
+                    if (!IsDropdownRoleCell((object)topLeftCell, colorRoles))
+                        continue;
+
                     var cellModel = GetOrCreateDropdownCellModel(
                         (object)topLeftCell,
                         row,
                         column,
-                        model);
+                        model,
+                        colorRoles);
 
                     var selectedValue = ReadActiveXSelectedValue((object)control);
                     var inputTarget = ReadLinkedCellPosition((object)embeddedObject, worksheetObject)
@@ -960,7 +1067,8 @@ public class SheetReaderService {
         object cellObject,
         int row,
         int column,
-        SheetModel model) {
+        SheetModel model,
+        CellColorRoles colorRoles) {
         var existingCell = model.Cells.FirstOrDefault(cell =>
             cell.Row == row &&
             cell.Column == column &&
@@ -983,7 +1091,7 @@ public class SheetReaderService {
         }
 
         ReadDisplayText(cellObject, cellModel);
-        ReadBackground(cellObject, cellModel);
+        ReadBackground(cellObject, cellModel, colorRoles);
         ReadFont(cellObject, cellModel);
         ReadAlignment(cellObject, cellModel);
         ReadBorders(cellObject, cellModel);
@@ -1876,6 +1984,12 @@ public class SheetReaderService {
         }
         catch {
         }
+    }
+
+    private sealed class CellColorRoles {
+        public HashSet<string> InputColors { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> DropdownColors { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> OutputColors { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     private sealed record ReadBounds(

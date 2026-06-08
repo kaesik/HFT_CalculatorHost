@@ -1,25 +1,17 @@
 using System.ComponentModel;
-using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using CalculatorHost.Models;
 using CalculatorHost.Rendering;
 using CalculatorHost.ViewModels;
+using Microsoft.Win32;
 
 namespace CalculatorHost.Views;
 
 public partial class CalculatorView {
-    private const double MinimumZoom = 0.75;
-    private const double MaximumZoom = 1.50;
-    private const double ZoomStep = 0.25;
-
     private readonly CalculatorViewModel _viewModel;
-    private bool _isChangingZoomInternally;
     private RenderedSheet? _renderedSheet;
-    private bool _renderedSheetContainsNonCellElements;
-    private SheetModel? _renderedSheetModel;
-    private double _zoomFactor = 1.0;
 
     public CalculatorView(CalculatorViewModel viewModel) {
         InitializeComponent();
@@ -27,14 +19,13 @@ public partial class CalculatorView {
         _viewModel = viewModel;
         DataContext = viewModel;
 
-        ApplyZoom();
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArguments) {
         switch (eventArguments.PropertyName) {
             case nameof(CalculatorViewModel.SheetModel):
-                UpdateOrRenderSheet();
+                RenderSheet();
                 break;
             case nameof(CalculatorViewModel.MacroButtons):
                 RebuildMacroButtons();
@@ -42,67 +33,30 @@ public partial class CalculatorView {
         }
     }
 
-    private void UpdateOrRenderSheet() {
-        var sheetModel = _viewModel.SheetModel;
-
-        if (sheetModel == null) {
-            SheetContentPresenter.Content = null;
-            SheetNameText.Text = "Arkusz: —";
-            SheetCounterText.Text = "Komórki: —";
-            SheetInfoText.Text = string.Empty;
+    private void RenderSheet() {
+        if (_viewModel.SheetModel == null) {
             _renderedSheet = null;
-            _renderedSheetModel = null;
-            _renderedSheetContainsNonCellElements = false;
+            SheetScrollViewer.Content = null;
             return;
         }
 
-        var renderingStopwatch = Stopwatch.StartNew();
-        var containsNonCellElements = ContainsNonCellElements(sheetModel);
-
-        if (_renderedSheet != null &&
-            ReferenceEquals(_renderedSheetModel, sheetModel) &&
-            !containsNonCellElements &&
-            !_renderedSheetContainsNonCellElements) {
-            SheetRenderer.UpdateCellValues(_renderedSheet, sheetModel);
-            UpdateSheetInformation(sheetModel);
-            renderingStopwatch.Stop();
-            _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
-            return;
-        }
-
-        _renderedSheet = SheetRenderer.RenderSheet(
-            sheetModel,
+        var renderedSheet = SheetRenderer.RenderSheet(
+            _viewModel.SheetModel,
             OnInputChanged,
             OnMacroButtonClicked);
 
-        _renderedSheetModel = sheetModel;
-        _renderedSheetContainsNonCellElements = containsNonCellElements;
-        SheetContentPresenter.Content = _renderedSheet.Canvas;
-        ApplyZoom();
-        UpdateSheetInformation(sheetModel);
-        renderingStopwatch.Stop();
-        _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
-    }
+        _renderedSheet = renderedSheet;
+        SheetScrollViewer.Content = renderedSheet.Canvas;
 
-    private static bool ContainsNonCellElements(SheetModel sheetModel) {
-        return sheetModel.Images.Count > 0 ||
-               sheetModel.MacroButtons.Any(button => button.IsSheetButton);
-    }
+        var inputCount = _viewModel.SheetModel.Cells.Count(cell => cell.IsInput);
+        var totalCells = _viewModel.SheetModel.Cells.Count(cell => !cell.IsMergedSlave);
 
-    private void UpdateSheetInformation(SheetModel sheetModel) {
-        var inputCount = sheetModel.Cells.Count(cell => cell.IsInput);
-        var dropdownCount = sheetModel.Cells.Count(cell => cell.InputType == CellInputType.ComboBox);
-        var totalCells = sheetModel.Cells.Count(cell => !cell.IsMergedSlave);
-        var rowCount = sheetModel.MaxRow - sheetModel.FirstRow + 1;
-        var columnCount = sheetModel.MaxColumn - sheetModel.FirstColumn + 1;
-
-        SheetNameText.Text = $"Arkusz: {sheetModel.SheetName}";
-        SheetCounterText.Text = $"{rowCount} w. × {columnCount} kol. · {inputCount} pól · {dropdownCount} list";
         SheetInfoText.Text =
-            $"Komórek renderowanych: {totalCells} · " +
-            $"Pól edytowalnych: {inputCount} · " +
-            $"Dropdownów: {dropdownCount} · " +
-            $"Obrazów: {sheetModel.Images.Count}";
+            $"Arkusz: {_viewModel.SheetModel.SheetName}  ·  " +
+            $"Wiersze: {_viewModel.SheetModel.MaxRow}  ·  " +
+            $"Kolumny: {_viewModel.SheetModel.MaxColumn}  ·  " +
+            $"Komórek: {totalCells}  ·  " +
+            $"Pól edytowalnych: {inputCount}";
     }
 
     private void RebuildMacroButtons() {
@@ -132,61 +86,56 @@ public partial class CalculatorView {
         }
     }
 
-    private void OnMacroButtonClicked(MacroButtonConfig macroButton) {
-        if (_viewModel.RunMacroCommand.CanExecute(macroButton))
-            _viewModel.RunMacroCommand.Execute(macroButton);
-    }
-
     private void OnInputChanged(int row, int column, string value) {
         _viewModel.SetPendingCellValue(row, column, value);
     }
 
+    private void OnMacroButtonClicked(MacroButtonConfig macroConfig) {
+        if (_viewModel.RunMacroCommand.CanExecute(macroConfig))
+            _viewModel.RunMacroCommand.Execute(macroConfig);
+    }
+
+    private async void SaveVersionButton_Click(object sender, RoutedEventArgs eventArguments) {
+        var dialog = new SaveFileDialog {
+            Title = "Zapisz wersję kalkulatora",
+            Filter = "Wersja kalkulatora (*.json)|*.json|Wszystkie pliki (*.*)|*.*",
+            DefaultExt = ".json",
+            AddExtension = true,
+            OverwritePrompt = true,
+            FileName = CreateDefaultVersionFileName()
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        await _viewModel.SaveVersionAsync(dialog.FileName);
+    }
+
+    private async void LoadVersionButton_Click(object sender, RoutedEventArgs eventArguments) {
+        var dialog = new OpenFileDialog {
+            Title = "Wczytaj wersję kalkulatora",
+            Filter = "Wersja kalkulatora (*.json)|*.json|Wszystkie pliki (*.*)|*.*",
+            DefaultExt = ".json",
+            Multiselect = false,
+            CheckFileExists = true
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        await _viewModel.LoadVersionAsync(dialog.FileName);
+    }
+
+    private string CreateDefaultVersionFileName() {
+        var calculatorName = string.IsNullOrWhiteSpace(_viewModel.CalculatorName)
+            ? "wersja_kalkulatora"
+            : _viewModel.CalculatorName;
+
+        foreach (var invalidCharacter in Path.GetInvalidFileNameChars())
+            calculatorName = calculatorName.Replace(invalidCharacter, '_');
+
+        return $"{calculatorName}_{DateTime.Now:yyyyMMdd_HHmm}.json";
+    }
+
     private void BackButton_Click(object sender, RoutedEventArgs eventArguments) {
         _viewModel.RequestClose();
-    }
-
-    private void ZoomSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> eventArguments) {
-        if (_isChangingZoomInternally) return;
-
-        _zoomFactor = ClampZoom(eventArguments.NewValue / 100.0);
-        ApplyZoom();
-    }
-
-    private void ZoomOut_Click(object sender, RoutedEventArgs eventArguments) {
-        SetZoom(_zoomFactor - ZoomStep);
-    }
-
-    private void ZoomIn_Click(object sender, RoutedEventArgs eventArguments) {
-        SetZoom(_zoomFactor + ZoomStep);
-    }
-
-    private void ResetZoom_Click(object sender, RoutedEventArgs eventArguments) {
-        SetZoom(1.0);
-    }
-
-    private void SetZoom(double zoomFactor) {
-        _zoomFactor = ClampZoom(zoomFactor);
-
-        _isChangingZoomInternally = true;
-        try {
-            ZoomSlider.Value = _zoomFactor * 100.0;
-        }
-        finally {
-            _isChangingZoomInternally = false;
-        }
-
-        ApplyZoom();
-    }
-
-    private void ApplyZoom() {
-        if (SheetViewport == null || ZoomValueButton == null)
-            return;
-
-        SheetViewport.LayoutTransform = new ScaleTransform(_zoomFactor, _zoomFactor);
-        ZoomValueButton.Content = $"{_zoomFactor * 100.0:0}%";
-    }
-
-    private static double ClampZoom(double zoomFactor) {
-        return Math.Max(MinimumZoom, Math.Min(MaximumZoom, zoomFactor));
     }
 }
