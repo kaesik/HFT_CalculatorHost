@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -23,6 +24,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private bool _hasPendingChanges;
     private bool _isLoading;
     private ObservableCollection<MacroButtonConfig> _macroButtons = [];
+    private string _operationPerformanceMessage = string.Empty;
+    private string _performanceMessage = string.Empty;
     private SheetModel? _sheetModel;
     private string _statusMessage = string.Empty;
 
@@ -112,6 +115,16 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
+    public string PerformanceMessage {
+        get => _performanceMessage;
+        private set {
+            if (_performanceMessage == value) return;
+
+            _performanceMessage = value;
+            OnPropertyChanged();
+        }
+    }
+
     public AsyncRelayCommand CalculateCommand { get; }
     public AsyncRelayCommand<MacroButtonConfig> RunMacroCommand { get; }
 
@@ -143,6 +156,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         IsLoading = true;
         ErrorMessage = string.Empty;
         StatusMessage = "Tworzenie kopii roboczej…";
+        ClearPerformanceMessage();
 
         var operationName = "tworzenia kopii roboczej";
 
@@ -151,31 +165,74 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 throw new FileNotFoundException("Nie znaleziono wskazanego pliku kalkulatora.",
                     calculatorInfo.FilePath);
 
+            var workingCopyStopwatch = Stopwatch.StartNew();
             var workingPath = _workingCopy.CreateWorkingCopy(calculatorInfo.FilePath);
+            workingCopyStopwatch.Stop();
 
             operationName = "uruchamiania programu Excel i otwierania skoroszytu";
             StatusMessage = "Uruchamianie Excela…";
+            var openingStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => _excelSession.OpenSession(workingPath));
+            openingStopwatch.Stop();
 
-            operationName = "odczytu pierwszego arkusza";
+            operationName = "sprawdzania pamięci układu arkusza";
+            StatusMessage = "Sprawdzanie pamięci układu…";
+            var cacheLoadStopwatch = Stopwatch.StartNew();
+            var isLayoutLoadedFromCache = _sheetLayoutCache.TryLoad(calculatorInfo, out var cachedModel);
+            cacheLoadStopwatch.Stop();
+
+            operationName = isLayoutLoadedFromCache
+                ? "odświeżania wartości arkusza"
+                : "odczytu pierwszego arkusza";
+            StatusMessage = isLayoutLoadedFromCache
+                ? "Odczyt wartości arkusza…"
+                : "Odczyt arkusza…";
+
+            var readingStopwatch = Stopwatch.StartNew();
             SheetModel model;
 
-            if (_sheetLayoutCache.TryLoad(calculatorInfo, out var cachedModel) && cachedModel != null) {
-                StatusMessage = "Odczyt wartości z arkusza…";
+            if (isLayoutLoadedFromCache && cachedModel != null)
                 model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, cachedModel));
-            }
-            else {
-                StatusMessage = "Odczyt układu arkusza…";
+            else
                 model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
-                _sheetLayoutCache.TrySave(calculatorInfo, model);
+
+            readingStopwatch.Stop();
+
+            var cacheSaveMessage = string.Empty;
+
+            if (!isLayoutLoadedFromCache) {
+                var cacheSaveStopwatch = Stopwatch.StartNew();
+                var isCacheSaved = _sheetLayoutCache.TrySave(calculatorInfo, model);
+                cacheSaveStopwatch.Stop();
+
+                cacheSaveMessage = isCacheSaved
+                    ? $" · Zapis cache: {FormatDuration(cacheSaveStopwatch.Elapsed)}"
+                    : " · Zapis cache: niepowodzenie";
             }
 
             operationName = "wczytywania konfiguracji makr";
+            var macroConfigurationStopwatch = Stopwatch.StartNew();
             var buttons = MacroConfigService.LoadForCalculator(calculatorInfo.FilePath);
+            macroConfigurationStopwatch.Stop();
 
             if (_disposed) return;
 
+            var readMessage = isLayoutLoadedFromCache
+                ? $"Cache + wartości: {FormatDuration(readingStopwatch.Elapsed)}"
+                : $"Pełny odczyt arkusza: {FormatDuration(readingStopwatch.Elapsed)}";
+
+            var cacheMessage = isLayoutLoadedFromCache
+                ? $"Cache: użyty ({FormatDuration(cacheLoadStopwatch.Elapsed)})"
+                : $"Cache: brak ({FormatDuration(cacheLoadStopwatch.Elapsed)})";
+
             ClearPendingChanges();
+            SetOperationPerformanceMessage(
+                $"Kopia: {FormatDuration(workingCopyStopwatch.Elapsed)} · " +
+                $"Excel: {FormatDuration(openingStopwatch.Elapsed)} · " +
+                $"{cacheMessage} · " +
+                $"{readMessage}" +
+                $"{cacheSaveMessage} · " +
+                $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)}");
             SheetModel = model;
             MacroButtons = new ObservableCollection<MacroButtonConfig>(buttons);
             StatusMessage = string.Empty;
@@ -210,6 +267,27 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             : string.Empty;
     }
 
+    public string GetDefaultVersionFilePath() {
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
+
+        return CalculatorVersionService.CreateDefaultVersionFilePath(_calculatorInfo.FilePath);
+    }
+
+    public string GetVersionsDirectory() {
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
+
+        return CalculatorVersionService.GetVersionsDirectory(_calculatorInfo.FilePath);
+    }
+
+    public List<CalculatorVersionFileInfo> GetMatchingVersionFiles() {
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
+
+        return CalculatorVersionService.FindMatchingVersionFiles(_calculatorInfo.FilePath);
+    }
+
     public async Task SaveVersionAsync(string versionFilePath) {
         if (_disposed || IsLoading) return;
 
@@ -218,6 +296,9 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
             if (SheetModel == null)
                 throw new InvalidOperationException("Nie ma wczytanego arkusza, więc nie można zapisać wersji.");
+
+            if (_calculatorInfo == null)
+                throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
 
             var version = CreateVersionModel();
             CalculatorVersionService.Save(versionFilePath, version);
@@ -237,10 +318,14 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         IsLoading = true;
         ErrorMessage = string.Empty;
         StatusMessage = "Wczytywanie wersji…";
+        ClearPerformanceMessage();
 
         try {
             if (SheetModel == null)
                 throw new InvalidOperationException("Nie ma wczytanego arkusza, więc nie można wczytać wersji.");
+
+            if (_calculatorInfo == null)
+                throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
 
             var version = CalculatorVersionService.Load(versionFilePath);
             ValidateVersion(version);
@@ -252,16 +337,28 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                     value.Value))
                 .ToList();
 
+            var applyingStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
-                WriteCellValues(values);
+                WritePendingValues(values);
                 _excelSession.Recalculate();
             });
+            applyingStopwatch.Stop();
 
-            var model = await RefreshCurrentSheetModelAsync();
+            var currentModel = SheetModel;
+
+            if (currentModel == null)
+                return;
+
+            var refreshStopwatch = Stopwatch.StartNew();
+            var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+            refreshStopwatch.Stop();
 
             if (_disposed) return;
 
             ClearPendingChanges();
+            SetOperationPerformanceMessage(
+                $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
+                $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
             SheetModel = model;
             StatusMessage = $"Wczytano wersję: {Path.GetFileName(versionFilePath)}";
         }
@@ -287,26 +384,48 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         CloseRequested?.Invoke();
     }
 
+    public void ReportRenderingDuration(TimeSpan duration) {
+        if (_disposed) return;
+
+        var renderingMessage = $"Renderowanie: {FormatDuration(duration)}";
+        PerformanceMessage = string.IsNullOrWhiteSpace(_operationPerformanceMessage)
+            ? renderingMessage
+            : $"{_operationPerformanceMessage} · {renderingMessage}";
+    }
+
     private async Task CalculateAsync() {
         if (_disposed || IsLoading || HasError) return;
 
         IsLoading = true;
         ErrorMessage = string.Empty;
         StatusMessage = "Przeliczanie…";
+        ClearPerformanceMessage();
 
         var pendingValues = _pendingCellValues.ToList();
 
         try {
+            var recalculationStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
-                WriteCellValues(pendingValues);
+                WritePendingValues(pendingValues);
                 _excelSession.Recalculate();
             });
+            recalculationStopwatch.Stop();
 
-            var model = await RefreshCurrentSheetModelAsync();
+            var currentModel = SheetModel;
+
+            if (currentModel == null)
+                return;
+
+            var refreshStopwatch = Stopwatch.StartNew();
+            var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+            refreshStopwatch.Stop();
 
             if (_disposed) return;
 
             ClearPendingChanges();
+            SetOperationPerformanceMessage(
+                $"Przeliczenie: {FormatDuration(recalculationStopwatch.Elapsed)} · " +
+                $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
             SheetModel = model;
             StatusMessage = string.Empty;
         }
@@ -328,22 +447,40 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         IsLoading = true;
         ErrorMessage = string.Empty;
         StatusMessage = $"Wykonywanie: {config.Label}…";
+        ClearPerformanceMessage();
 
         var pendingValues = _pendingCellValues.ToList();
 
         try {
+            var macroStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
-                WriteCellValues(pendingValues);
-                _excelSession.RunMacro(config.MacroName);
+                WritePendingValues(pendingValues);
+                _excelSession.RunMacroButton(config);
             });
+            macroStopwatch.Stop();
 
-            var model = config.RefreshLayoutAfterRun
-                ? await ReadFullSheetModelAndUpdateCacheAsync()
-                : await RefreshCurrentSheetModelAsync();
+            var currentModel = SheetModel;
+            var refreshStopwatch = Stopwatch.StartNew();
+            SheetModel model;
+            string refreshOperationName;
+
+            if (config.RefreshLayoutAfterRun || currentModel == null) {
+                model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
+                refreshOperationName = "Pełny odczyt arkusza";
+            }
+            else {
+                model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+                refreshOperationName = "Odświeżenie wartości";
+            }
+
+            refreshStopwatch.Stop();
 
             if (_disposed) return;
 
             ClearPendingChanges();
+            SetOperationPerformanceMessage(
+                $"Makro: {FormatDuration(macroStopwatch.Elapsed)} · " +
+                $"{refreshOperationName}: {FormatDuration(refreshStopwatch.Elapsed)}");
             SheetModel = model;
             StatusMessage = string.Empty;
         }
@@ -359,25 +496,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    private async Task<SheetModel> RefreshCurrentSheetModelAsync() {
-        if (SheetModel == null)
-            throw new InvalidOperationException("Nie ma wczytanego arkusza.");
-
-        return await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, SheetModel));
-    }
-
-    private async Task<SheetModel> ReadFullSheetModelAndUpdateCacheAsync() {
-        var model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
-
-        if (_calculatorInfo != null)
-            _sheetLayoutCache.TrySave(_calculatorInfo, model);
-
-        return model;
-    }
-
     private CalculatorVersionModel CreateVersionModel() {
         if (SheetModel == null)
             throw new InvalidOperationException("Nie ma wczytanego arkusza.");
+
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
 
         var values = SheetModel.Cells
             .Where(cell => cell.IsInput && !cell.IsMergedSlave)
@@ -399,8 +523,9 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             .ToList();
 
         return new CalculatorVersionModel {
-            FormatVersion = 1,
+            FormatVersion = CalculatorVersionService.CurrentFormatVersion,
             CalculatorName = CalculatorName,
+            CalculatorFileIdentity = CalculatorVersionService.CreateFileIdentity(_calculatorInfo.FilePath),
             SheetName = SheetModel.SheetName,
             CreatedAt = DateTime.Now,
             Values = values
@@ -408,6 +533,11 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     }
 
     private void ValidateVersion(CalculatorVersionModel version) {
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
+
+        CalculatorVersionService.ValidateBelongsToCalculator(version, _calculatorInfo.FilePath);
+
         if (!string.IsNullOrWhiteSpace(version.CalculatorName) &&
             !string.Equals(version.CalculatorName, CalculatorName, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
@@ -417,18 +547,34 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             throw new InvalidOperationException("Plik wersji nie zawiera żadnych zapisanych wartości.");
     }
 
-    private void WriteCellValues(
-        IEnumerable<KeyValuePair<(int Row, int Column), string>> values) {
-        foreach (var valuePair in values) {
-            var value = TryParseNumeric(valuePair.Value, out var number)
+    private void WritePendingValues(
+        IEnumerable<KeyValuePair<(int Row, int Column), string>> pendingValues) {
+        foreach (var pendingValue in pendingValues) {
+            var value = TryParseNumeric(pendingValue.Value, out var number)
                 ? number
-                : (object?)valuePair.Value;
+                : (object?)pendingValue.Value;
 
             _excelSession.WriteCellValue(
-                valuePair.Key.Row,
-                valuePair.Key.Column,
+                pendingValue.Key.Row,
+                pendingValue.Key.Column,
                 value);
         }
+    }
+
+    private void ClearPerformanceMessage() {
+        _operationPerformanceMessage = string.Empty;
+        PerformanceMessage = string.Empty;
+    }
+
+    private void SetOperationPerformanceMessage(string message) {
+        _operationPerformanceMessage = message;
+        PerformanceMessage = message;
+    }
+
+    private static string FormatDuration(TimeSpan duration) {
+        return duration.TotalSeconds >= 1.0
+            ? $"{duration.TotalSeconds:N2} s"
+            : $"{duration.TotalMilliseconds:N0} ms";
     }
 
     private void ClearPendingChanges() {

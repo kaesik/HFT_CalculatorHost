@@ -1,11 +1,19 @@
 namespace CalculatorHost.Models;
 
 public class CalculatorVersionModel {
-    public int FormatVersion { get; init; } = 1;
+    public int FormatVersion { get; init; } = 2;
     public string CalculatorName { get; init; } = string.Empty;
+    public CalculatorVersionFileIdentityModel? CalculatorFileIdentity { get; init; }
     public string SheetName { get; init; } = string.Empty;
     public DateTime CreatedAt { get; init; } = DateTime.Now;
     public List<CalculatorVersionCellModel> Values { get; init; } = [];
+}
+
+public class CalculatorVersionFileIdentityModel {
+    public string FileName { get; init; } = string.Empty;
+    public long FileSizeBytes { get; init; }
+    public long LastWriteTimeUtcTicks { get; init; }
+    public string Sha256 { get; init; } = string.Empty;
 }
 
 public class CalculatorVersionCellModel {
