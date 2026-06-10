@@ -18,6 +18,7 @@ public class CellModel {
 
     public string DisplayText { get; set; } = string.Empty;
     public object? RawValue { get; set; }
+    public string? FormulaText { get; set; }
 
     public Color BackgroundColor { get; set; } = Colors.White;
     public Color ForegroundColor { get; set; } = Colors.Black;
@@ -42,5 +43,9 @@ public class CellModel {
     public List<string> DropdownValues { get; set; } = [];
     public int? InputTargetRow { get; set; }
     public int? InputTargetColumn { get; set; }
+    public string? InputTargetSheetName { get; set; }
+    public string? InputTargetFormulaText { get; set; }
+    public string? DropdownControlName { get; set; }
+    public bool IsActiveXDropdown { get; set; }
     public bool DropdownWritesSelectedIndex { get; set; }
 }

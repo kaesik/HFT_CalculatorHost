@@ -11,6 +11,7 @@ using CalculatorHost.Services;
 namespace CalculatorHost.ViewModels;
 
 public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
+    private readonly Dictionary<(int Row, int Column), string> _committedCellValues = [];
     private readonly ExcelSessionService _excelSession;
     private readonly Dictionary<(int Row, int Column), string> _pendingCellValues = [];
     private readonly SheetLayoutCacheService _sheetLayoutCache;
@@ -225,6 +226,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 ? $"Cache: użyty ({FormatDuration(cacheLoadStopwatch.Elapsed)})"
                 : $"Cache: brak ({FormatDuration(cacheLoadStopwatch.Elapsed)})";
 
+            UpdateCommittedCellValues(model);
             ClearPendingChanges();
             SetOperationPerformanceMessage(
                 $"Kopia: {FormatDuration(workingCopyStopwatch.Elapsed)} · " +
@@ -252,11 +254,13 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     public void SetPendingCellValue(int row, int column, string value) {
         if (_disposed || IsLoading || HasError || SheetModel == null) return;
 
-        var originalValue = SheetModel.Cells
-            .FirstOrDefault(cell => cell.Row == row && cell.Column == column)
-            ?.DisplayText ?? string.Empty;
+        var originalValue = _committedCellValues.TryGetValue((row, column), out var committedValue)
+            ? committedValue
+            : SheetModel.Cells
+                .FirstOrDefault(cell => cell.Row == row && cell.Column == column)
+                ?.DisplayText ?? string.Empty;
 
-        if (string.Equals(originalValue, value, StringComparison.Ordinal))
+        if (AreDropdownTextsEqual(originalValue, value))
             _pendingCellValues.Remove((row, column));
         else
             _pendingCellValues[(row, column)] = value;
@@ -355,6 +359,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
             if (_disposed) return;
 
+            UpdateCommittedCellValues(model);
             ClearPendingChanges();
             SetOperationPerformanceMessage(
                 $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
@@ -401,13 +406,17 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         StatusMessage = "Przeliczanie…";
         ClearPerformanceMessage();
 
-        var pendingValues = _pendingCellValues.ToList();
+        var pendingValues = BuildPendingValuesWithSynchronizedDropdowns(_pendingCellValues.ToList());
 
         try {
             var recalculationStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
-                WritePendingValues(pendingValues);
-                _excelSession.Recalculate();
+                _excelSession.ExecuteWithEventsEnabled(() => {
+                    WritePendingValues(pendingValues);
+                    _excelSession.Recalculate();
+                    WritePendingValues(pendingValues);
+                    _excelSession.Recalculate();
+                });
             });
             recalculationStopwatch.Stop();
 
@@ -422,6 +431,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
             if (_disposed) return;
 
+            UpdateCommittedCellValues(model);
             ClearPendingChanges();
             SetOperationPerformanceMessage(
                 $"Przeliczenie: {FormatDuration(recalculationStopwatch.Elapsed)} · " +
@@ -449,13 +459,17 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         StatusMessage = $"Wykonywanie: {config.Label}…";
         ClearPerformanceMessage();
 
-        var pendingValues = _pendingCellValues.ToList();
+        var pendingValues = BuildPendingValuesWithSynchronizedDropdowns(_pendingCellValues.ToList());
 
         try {
             var macroStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
-                WritePendingValues(pendingValues);
-                _excelSession.RunMacroButton(config);
+                _excelSession.ExecuteWithEventsEnabled(() => {
+                    WritePendingValues(pendingValues);
+                    _excelSession.RunMacroButton(config);
+                    WritePendingValues(pendingValues);
+                    _excelSession.Recalculate();
+                });
             });
             macroStopwatch.Stop();
 
@@ -477,6 +491,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
             if (_disposed) return;
 
+            UpdateCommittedCellValues(model);
             ClearPendingChanges();
             SetOperationPerformanceMessage(
                 $"Makro: {FormatDuration(macroStopwatch.Elapsed)} · " +
@@ -547,18 +562,219 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             throw new InvalidOperationException("Plik wersji nie zawiera żadnych zapisanych wartości.");
     }
 
+
+    private List<KeyValuePair<(int Row, int Column), string>> BuildPendingValuesWithSynchronizedDropdowns(
+        List<KeyValuePair<(int Row, int Column), string>> pendingValues) {
+        if (SheetModel == null || pendingValues.Count == 0)
+            return pendingValues;
+
+        var result = new Dictionary<(int Row, int Column), string>();
+
+        foreach (var pendingValue in pendingValues)
+            result[pendingValue.Key] = pendingValue.Value;
+
+        var dropdownCells = SheetModel.Cells
+            .Where(cell =>
+                !cell.IsMergedSlave &&
+                cell.InputType == CellInputType.ComboBox &&
+                cell.DropdownValues.Count > 0)
+            .ToList();
+
+        if (dropdownCells.Count < 2)
+            return result
+                .Select(value => new KeyValuePair<(int Row, int Column), string>(value.Key, value.Value))
+                .ToList();
+
+        var dropdownsByPosition = dropdownCells.ToDictionary(cell => (cell.Row, cell.Column), cell => cell);
+
+        foreach (var pendingValue in pendingValues) {
+            if (!dropdownsByPosition.TryGetValue(pendingValue.Key, out var changedDropdown))
+                continue;
+
+            var changedDisplayText = NormalizeDropdownText(GetCommittedCellValue(changedDropdown));
+            var selectedText = NormalizeDropdownText(pendingValue.Value);
+
+            if (string.IsNullOrWhiteSpace(selectedText))
+                continue;
+
+            foreach (var candidateDropdown in dropdownCells) {
+                if (candidateDropdown.Row == changedDropdown.Row &&
+                    candidateDropdown.Column == changedDropdown.Column)
+                    continue;
+
+                if (!DropdownContainsValue(candidateDropdown, pendingValue.Value))
+                    continue;
+
+                if (!ShouldSynchronizeDropdown(
+                        changedDropdown,
+                        candidateDropdown,
+                        changedDisplayText,
+                        NormalizeDropdownText(GetCommittedCellValue(candidateDropdown)),
+                        selectedText))
+                    continue;
+
+                result[(candidateDropdown.Row, candidateDropdown.Column)] = pendingValue.Value;
+            }
+        }
+
+        return result
+            .Select(value => new KeyValuePair<(int Row, int Column), string>(value.Key, value.Value))
+            .ToList();
+    }
+
+    private static bool ShouldSynchronizeDropdown(
+        CellModel changedDropdown,
+        CellModel candidateDropdown,
+        string changedDisplayText,
+        string candidateDisplayText,
+        string selectedText) {
+        if (HaveSameInputTarget(changedDropdown, candidateDropdown))
+            return true;
+
+        if (AreDropdownTextsEqual(candidateDisplayText, changedDisplayText))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(selectedText) &&
+            AreDropdownTextsEqual(candidateDisplayText, selectedText))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(candidateDisplayText) &&
+            string.IsNullOrWhiteSpace(changedDisplayText))
+            return true;
+
+        return false;
+    }
+
+    private static bool HaveSameInputTarget(CellModel firstDropdown, CellModel secondDropdown) {
+        if (firstDropdown.InputTargetRow == null ||
+            firstDropdown.InputTargetColumn == null ||
+            secondDropdown.InputTargetRow == null ||
+            secondDropdown.InputTargetColumn == null)
+            return false;
+
+        return firstDropdown.InputTargetRow == secondDropdown.InputTargetRow &&
+               firstDropdown.InputTargetColumn == secondDropdown.InputTargetColumn &&
+               string.Equals(
+                   firstDropdown.InputTargetSheetName ?? string.Empty,
+                   secondDropdown.InputTargetSheetName ?? string.Empty,
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> NormalizeDropdownValues(IEnumerable<string> values) {
+        return values
+            .Select(NormalizeDropdownText)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToList();
+    }
+
+    private static bool DropdownContainsValue(CellModel dropdown, string value) {
+        return dropdown.DropdownValues.Any(dropdownValue => AreDropdownTextsEqual(dropdownValue, value));
+    }
+
+    private static bool AreDropdownTextsEqual(string? firstValue, string? secondValue) {
+        var firstText = NormalizeDropdownText(firstValue);
+        var secondText = NormalizeDropdownText(secondValue);
+
+        if (string.Equals(firstText, secondText, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (TryParseNumeric(firstText, out var firstNumber) &&
+            TryParseNumeric(secondText, out var secondNumber))
+            return Math.Abs(firstNumber - secondNumber) < 0.0000001;
+
+        return false;
+    }
+
     private void WritePendingValues(
         IEnumerable<KeyValuePair<(int Row, int Column), string>> pendingValues) {
+        var cellModels = SheetModel?.Cells
+                             .Where(cell => !cell.IsMergedSlave)
+                             .ToDictionary(cell => (cell.Row, cell.Column), cell => cell)
+                         ?? [];
+
         foreach (var pendingValue in pendingValues) {
-            var value = TryParseNumeric(pendingValue.Value, out var number)
-                ? number
-                : (object?)pendingValue.Value;
+            cellModels.TryGetValue(pendingValue.Key, out var cellModel);
+
+            var selectedIndex = cellModel?.InputType == CellInputType.ComboBox
+                ? GetDropdownSelectedIndex(cellModel, pendingValue.Value)
+                : 0;
+
+            var dropdownControlWasWritten = cellModel?.InputType == CellInputType.ComboBox &&
+                                            _excelSession.TryWriteDropdownControlValue(
+                                                cellModel,
+                                                pendingValue.Value,
+                                                selectedIndex);
+
+            var hasExplicitInputTarget = cellModel is { InputTargetRow: not null, InputTargetColumn: not null };
+
+            if (dropdownControlWasWritten && !hasExplicitInputTarget)
+                continue;
+
+            var targetRow = cellModel?.InputTargetRow ?? pendingValue.Key.Row;
+            var targetColumn = cellModel?.InputTargetColumn ?? pendingValue.Key.Column;
+            var targetSheetName = cellModel?.InputTargetSheetName;
+            var value = CreateExcelInputValue(cellModel, pendingValue.Value, selectedIndex);
 
             _excelSession.WriteCellValue(
-                pendingValue.Key.Row,
-                pendingValue.Key.Column,
-                value);
+                targetRow,
+                targetColumn,
+                value,
+                targetSheetName);
         }
+    }
+
+    private static object? CreateExcelInputValue(CellModel? cellModel, string text, int selectedIndex = 0) {
+        if (cellModel?.InputType == CellInputType.ComboBox && cellModel.DropdownWritesSelectedIndex) {
+            var resolvedSelectedIndex = selectedIndex > 0
+                ? selectedIndex
+                : GetDropdownSelectedIndex(cellModel, text);
+
+            if (resolvedSelectedIndex > 0)
+                return resolvedSelectedIndex;
+        }
+
+        return TryParseNumeric(text, out var number)
+            ? number
+            : string.IsNullOrWhiteSpace(text)
+                ? null
+                : text;
+    }
+
+    private static int GetDropdownSelectedIndex(CellModel cellModel, string selectedValue) {
+        if (cellModel.DropdownValues.Count == 0 || string.IsNullOrWhiteSpace(selectedValue))
+            return 0;
+
+        var normalizedSelectedValue = NormalizeDropdownText(selectedValue);
+
+        for (var index = 0; index < cellModel.DropdownValues.Count; index++)
+            if (AreDropdownTextsEqual(cellModel.DropdownValues[index], normalizedSelectedValue))
+                return index + 1;
+
+        return 0;
+    }
+
+    private static string NormalizeDropdownText(string? value) {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var text = value.Replace('\u00A0', ' ');
+        var parts = text.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+        return string.Join(" ", parts).Trim();
+    }
+
+
+    private string GetCommittedCellValue(CellModel cellModel) {
+        return _committedCellValues.TryGetValue((cellModel.Row, cellModel.Column), out var committedValue)
+            ? committedValue
+            : cellModel.DisplayText;
+    }
+
+    private void UpdateCommittedCellValues(SheetModel model) {
+        _committedCellValues.Clear();
+
+        foreach (var cell in model.Cells.Where(cell => !cell.IsMergedSlave))
+            _committedCellValues[(cell.Row, cell.Column)] = cell.DisplayText;
     }
 
     private void ClearPerformanceMessage() {

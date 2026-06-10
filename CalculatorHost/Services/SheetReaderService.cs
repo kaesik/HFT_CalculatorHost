@@ -10,9 +10,9 @@ namespace CalculatorHost.Services;
 public class SheetReaderService {
     private const double PointsToDips = 96.0 / 72.0;
 
-    private const int MaximumDirectReadCellCount = 3000;
-    private const int AdditionalRowsAfterLastContent = 6;
-    private const int AdditionalColumnsAfterLastContent = 4;
+    private const int MaximumDirectReadCellCount = 250000;
+    private const int AdditionalRowsAfterLastContent = 80;
+    private const int AdditionalColumnsAfterLastContent = 40;
 
     private const int ExcelColorIndexNone = -4142;
 
@@ -27,6 +27,7 @@ public class SheetReaderService {
     private const int ExcelReferenceStyleA1 = 1;
     private const int ExcelReferenceTypeAbsolute = 1;
     private const int ExcelShapeTypeFormControl = 8;
+    private const int ExcelShapeTypeLine = 9;
     private const int ExcelShapeTypeLinkedPicture = 11;
     private const int ExcelShapeTypePicture = 13;
     private const int ExcelShapeTypeGraphic = 28;
@@ -202,14 +203,16 @@ public class SheetReaderService {
             return new ReadBounds(
                 usedFirstRow,
                 usedFirstColumn,
-                Math.Min(usedMaximumRow, usedFirstRow + 30),
-                Math.Min(usedMaximumColumn, usedFirstColumn + 20));
+                Math.Min(usedMaximumRow, usedFirstRow + 160),
+                Math.Min(usedMaximumColumn, usedFirstColumn + 80));
 
         return new ReadBounds(
             usedFirstRow,
             usedFirstColumn,
-            Math.Min(usedMaximumRow, lastContentRow.Value + AdditionalRowsAfterLastContent),
-            Math.Min(usedMaximumColumn, lastContentColumn.Value + AdditionalColumnsAfterLastContent));
+            Math.Min(usedMaximumRow,
+                Math.Max(lastContentRow.Value + AdditionalRowsAfterLastContent, usedFirstRow + 160)),
+            Math.Min(usedMaximumColumn,
+                Math.Max(lastContentColumn.Value + AdditionalColumnsAfterLastContent, usedFirstColumn + 80)));
     }
 
     private static int? FindLastContentCoordinate(
@@ -253,10 +256,14 @@ public class SheetReaderService {
     private static CellColorRoles ReadColorRoles(object worksheetObject) {
         var roles = new CellColorRoles();
 
-        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, InputRoleColorRow, RoleColorColumn) ?? DefaultInputColor);
-        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, SecondInputRoleColorRow, RoleColorColumn) ?? DefaultSecondInputColor);
-        roles.DropdownColors.Add(ReadCellBackgroundHex(worksheetObject, DropdownRoleColorRow, RoleColorColumn) ?? DefaultDropdownColor);
-        roles.OutputColors.Add(ReadCellBackgroundHex(worksheetObject, OutputRoleColorRow, RoleColorColumn) ?? DefaultOutputColor);
+        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, InputRoleColorRow, RoleColorColumn) ??
+                              DefaultInputColor);
+        roles.InputColors.Add(ReadCellBackgroundHex(worksheetObject, SecondInputRoleColorRow, RoleColorColumn) ??
+                              DefaultSecondInputColor);
+        roles.DropdownColors.Add(ReadCellBackgroundHex(worksheetObject, DropdownRoleColorRow, RoleColorColumn) ??
+                                 DefaultDropdownColor);
+        roles.OutputColors.Add(ReadCellBackgroundHex(worksheetObject, OutputRoleColorRow, RoleColorColumn) ??
+                               DefaultOutputColor);
 
         return roles;
     }
@@ -399,11 +406,21 @@ public class SheetReaderService {
                         continue;
 
                     if (mergedSlaveCells.Contains((row, column))) {
-                        model.Cells.Add(new CellModel {
-                            Row = row,
-                            Column = column,
-                            IsMergedSlave = true
-                        });
+                        dynamic? slaveCell = null;
+
+                        try {
+                            slaveCell = cells[row, column];
+
+                            var slaveCellModel = ReadMergedSlaveCell(
+                                (object)slaveCell,
+                                row,
+                                column);
+
+                            model.Cells.Add(slaveCellModel);
+                        }
+                        finally {
+                            ReleaseComObject(slaveCell);
+                        }
 
                         continue;
                     }
@@ -464,13 +481,30 @@ public class SheetReaderService {
 
         var hasBackground = ReadBackground(cellObject, model, colorRoles);
 
-        if (!HasContent(model) && !hasBackground)
+        ReadMerge(cellObject, model);
+        ReadBorders(cellObject, model);
+
+        if (!HasContent(model) && !hasBackground && !HasVisibleBorder(model))
             return null;
 
         ReadFont(cellObject, model);
         ReadAlignment(cellObject, model);
-        ReadBorders(cellObject, model);
-        ReadMerge(cellObject, model);
+
+        return model;
+    }
+
+
+    private CellModel ReadMergedSlaveCell(
+        object cellObject,
+        int row,
+        int column) {
+        var model = new CellModel {
+            Row = row,
+            Column = column,
+            IsMergedSlave = true
+        };
+
+        ReadBorders(cellObject, model, false);
 
         return model;
     }
@@ -489,6 +523,13 @@ public class SheetReaderService {
 
     private static bool HasContent(CellModel model) {
         return model.RawValue != null || !string.IsNullOrWhiteSpace(model.DisplayText);
+    }
+
+    private static bool HasVisibleBorder(CellModel model) {
+        return model.BorderTopThickness > 0.0
+               || model.BorderBottomThickness > 0.0
+               || model.BorderLeftThickness > 0.0
+               || model.BorderRightThickness > 0.0;
     }
 
     private static object? ReadRangeValues(
@@ -646,24 +687,106 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadBorders(object cellObject, CellModel model) {
+    private void ReadBorders(object cellObject, CellModel model, bool includeMergeAreaBorders = true) {
         dynamic cell = cellObject;
         dynamic? borders = null;
+        dynamic? displayFormat = null;
+        dynamic? displayBorders = null;
+        dynamic? mergeArea = null;
+        dynamic? mergeBorders = null;
+        dynamic? mergeDisplayFormat = null;
+        dynamic? mergeDisplayBorders = null;
+
+        var dominantColor = Colors.Black;
 
         try {
             borders = cell.Borders;
-            var dominantColor = Colors.Black;
-
-            model.BorderTopThickness = ReadBorderThickness(borders, ExcelBorderEdgeTop, ref dominantColor);
-            model.BorderBottomThickness = ReadBorderThickness(borders, ExcelBorderEdgeBottom, ref dominantColor);
-            model.BorderLeftThickness = ReadBorderThickness(borders, ExcelBorderEdgeLeft, ref dominantColor);
-            model.BorderRightThickness = ReadBorderThickness(borders, ExcelBorderEdgeRight, ref dominantColor);
-            model.BorderColor = dominantColor;
+            ApplyBordersFromCollection(borders, model, ref dominantColor);
         }
         catch {
         }
         finally {
             ReleaseComObject(borders);
+        }
+
+        try {
+            displayFormat = cell.DisplayFormat;
+            displayBorders = displayFormat.Borders;
+            ApplyBordersFromCollection(displayBorders, model, ref dominantColor);
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(displayBorders);
+            ReleaseComObject(displayFormat);
+        }
+
+        try {
+            if (!includeMergeAreaBorders || !Convert.ToBoolean(cell.MergeCells)) {
+                model.BorderColor = dominantColor;
+                return;
+            }
+
+            mergeArea = cell.MergeArea;
+            mergeBorders = mergeArea.Borders;
+            ApplyBordersFromCollection(mergeBorders, model, ref dominantColor);
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(mergeBorders);
+        }
+
+        try {
+            if (mergeArea != null) {
+                mergeDisplayFormat = mergeArea.DisplayFormat;
+                mergeDisplayBorders = mergeDisplayFormat.Borders;
+                ApplyBordersFromCollection(mergeDisplayBorders, model, ref dominantColor);
+            }
+        }
+        catch {
+        }
+        finally {
+            ReleaseComObject(mergeDisplayBorders);
+            ReleaseComObject(mergeDisplayFormat);
+            ReleaseComObject(mergeArea);
+        }
+
+        model.BorderColor = dominantColor;
+    }
+
+    private static void ApplyBordersFromCollection(
+        dynamic borders,
+        CellModel model,
+        ref Color dominantColor) {
+        var topColor = dominantColor;
+        var bottomColor = dominantColor;
+        var leftColor = dominantColor;
+        var rightColor = dominantColor;
+
+        var topThickness = ReadBorderThickness(borders, ExcelBorderEdgeTop, ref topColor);
+        var bottomThickness = ReadBorderThickness(borders, ExcelBorderEdgeBottom, ref bottomColor);
+        var leftThickness = ReadBorderThickness(borders, ExcelBorderEdgeLeft, ref leftColor);
+        var rightThickness = ReadBorderThickness(borders, ExcelBorderEdgeRight, ref rightColor);
+
+        if (topThickness > model.BorderTopThickness) {
+            model.BorderTopThickness = topThickness;
+            dominantColor = topColor;
+        }
+
+        if (bottomThickness > model.BorderBottomThickness) {
+            model.BorderBottomThickness = bottomThickness;
+            dominantColor = bottomColor;
+        }
+
+        if (leftThickness > model.BorderLeftThickness) {
+            model.BorderLeftThickness = leftThickness;
+            dominantColor = leftColor;
+        }
+
+        if (rightThickness > model.BorderRightThickness) {
+            model.BorderRightThickness = rightThickness;
+            dominantColor = rightColor;
         }
     }
 
@@ -685,7 +808,12 @@ public class SheetReaderService {
             catch {
             }
 
-            return ExcelBorderWeightToDips(border.Weight);
+            try {
+                return ExcelBorderWeightToDips(border.Weight);
+            }
+            catch {
+                return 1.0;
+            }
         }
         catch {
             return 0.0;
@@ -976,6 +1104,9 @@ public class SheetReaderService {
                         selectedValue,
                         inputTarget,
                         inputTarget != null);
+
+                    cellModel.DropdownControlName = Convert.ToString(shape.Name);
+                    cellModel.IsActiveXDropdown = false;
                 }
                 catch {
                 }
@@ -1046,6 +1177,9 @@ public class SheetReaderService {
                         selectedValue,
                         inputTarget,
                         false);
+
+                    cellModel.DropdownControlName = Convert.ToString(embeddedObject.Name);
+                    cellModel.IsActiveXDropdown = true;
                 }
                 catch {
                 }
@@ -1446,12 +1580,10 @@ public class SheetReaderService {
         }
     }
 
-    private static (int Row, int Column)? ReadLinkedCellPosition(
+    private static LinkedCellPosition? ReadLinkedCellPosition(
         object controlObject,
         object worksheetObject) {
         dynamic control = controlObject;
-        dynamic worksheet = worksheetObject;
-        dynamic? linkedCell = null;
 
         try {
             var linkedCellReference = Convert.ToString(control.LinkedCell);
@@ -1459,9 +1591,54 @@ public class SheetReaderService {
             if (string.IsNullOrWhiteSpace(linkedCellReference))
                 return null;
 
-            linkedCell = worksheet.Range[linkedCellReference];
+            return ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
+        }
+        catch {
+            return null;
+        }
+    }
 
-            return (
+    private static LinkedCellPosition? ReadLinkedCellPositionFromReference(
+        string linkedCellReference,
+        object worksheetObject) {
+        dynamic worksheet = worksheetObject;
+        dynamic? workbook = null;
+        dynamic? worksheets = null;
+        dynamic? linkedWorksheet = null;
+        dynamic? linkedCell = null;
+        dynamic? application = null;
+
+        try {
+            var reference = NormalizeExcelReference(linkedCellReference);
+
+            if (string.IsNullOrWhiteSpace(reference))
+                return null;
+
+            var hasWorksheetReference = TrySplitWorksheetReference(
+                reference,
+                out var worksheetName,
+                out var cellReference);
+
+            if (hasWorksheetReference && !string.IsNullOrWhiteSpace(worksheetName)) {
+                workbook = worksheet.Parent;
+                worksheets = workbook.Worksheets;
+                linkedWorksheet = worksheets[worksheetName];
+                linkedCell = linkedWorksheet.Range[cellReference];
+            }
+            else {
+                try {
+                    linkedCell = worksheet.Range[cellReference];
+                }
+                catch {
+                    application = worksheet.Application;
+                    linkedCell = application.Range[cellReference];
+                }
+
+                linkedWorksheet = linkedCell.Worksheet;
+            }
+
+            return new LinkedCellPosition(
+                Convert.ToString(linkedWorksheet.Name),
                 Convert.ToInt32(linkedCell.Row),
                 Convert.ToInt32(linkedCell.Column));
         }
@@ -1469,15 +1646,83 @@ public class SheetReaderService {
             return null;
         }
         finally {
+            application = null;
             ReleaseComObject(linkedCell);
+            ReleaseComObject(linkedWorksheet);
+            ReleaseComObject(worksheets);
         }
+    }
+
+    private static string NormalizeExcelReference(string reference) {
+        var normalizedReference = reference.Trim();
+
+        if (normalizedReference.StartsWith("=", StringComparison.Ordinal))
+            normalizedReference = normalizedReference[1..].Trim();
+
+        return normalizedReference;
+    }
+
+    private static bool TrySplitWorksheetReference(
+        string reference,
+        out string? worksheetName,
+        out string cellReference) {
+        worksheetName = null;
+        cellReference = reference;
+
+        var separatorIndex = FindWorksheetSeparator(reference);
+
+        if (separatorIndex < 0)
+            return false;
+
+        worksheetName = NormalizeWorksheetName(reference[..separatorIndex]);
+        cellReference = reference[(separatorIndex + 1)..].Trim();
+
+        return !string.IsNullOrWhiteSpace(worksheetName) &&
+               !string.IsNullOrWhiteSpace(cellReference);
+    }
+
+    private static int FindWorksheetSeparator(string reference) {
+        var isInsideQuotedWorksheetName = false;
+
+        for (var index = 0; index < reference.Length; index++) {
+            if (reference[index] == '\'') {
+                if (index + 1 < reference.Length && reference[index + 1] == '\'') {
+                    index++;
+                    continue;
+                }
+
+                isInsideQuotedWorksheetName = !isInsideQuotedWorksheetName;
+                continue;
+            }
+
+            if (reference[index] == '!' && !isInsideQuotedWorksheetName)
+                return index;
+        }
+
+        return -1;
+    }
+
+    private static string NormalizeWorksheetName(string worksheetNameReference) {
+        var worksheetName = worksheetNameReference.Trim();
+
+        if (worksheetName.Length >= 2 &&
+            worksheetName.StartsWith("'", StringComparison.Ordinal) &&
+            worksheetName.EndsWith("'", StringComparison.Ordinal))
+            worksheetName = worksheetName[1..^1].Replace("''", "'");
+
+        var workbookNameEndIndex = worksheetName.LastIndexOf(']');
+
+        if (workbookNameEndIndex >= 0 && workbookNameEndIndex + 1 < worksheetName.Length)
+            worksheetName = worksheetName[(workbookNameEndIndex + 1)..];
+
+        return worksheetName.Trim();
     }
 
     private static void ApplyDropdownValues(
         CellModel model,
         IEnumerable<string> values,
         string? selectedValue,
-        (int Row, int Column)? inputTarget,
+        LinkedCellPosition? inputTarget,
         bool dropdownWritesSelectedIndex) {
         model.IsInput = true;
         model.InputType = CellInputType.ComboBox;
@@ -1488,6 +1733,7 @@ public class SheetReaderService {
 
         model.InputTargetRow = inputTarget?.Row;
         model.InputTargetColumn = inputTarget?.Column;
+        model.InputTargetSheetName = inputTarget?.SheetName;
         model.DropdownWritesSelectedIndex = dropdownWritesSelectedIndex;
 
         if (!string.IsNullOrWhiteSpace(selectedValue))
@@ -1816,7 +2062,7 @@ public class SheetReaderService {
                 try {
                     shape = shapes.Item(index);
 
-                    if (!IsRenderablePicture((object)shape))
+                    if (!IsRenderableSheetVisualShape((object)shape))
                         continue;
 
                     var imageBytes = TryCopyShapeAsPngFromClipboard((object)shape);
@@ -1850,7 +2096,7 @@ public class SheetReaderService {
         }
     }
 
-    private static bool IsRenderablePicture(object shapeObject) {
+    private static bool IsRenderableSheetVisualShape(object shapeObject) {
         dynamic shape = shapeObject;
 
         try {
@@ -1866,7 +2112,8 @@ public class SheetReaderService {
             return shapeType is ExcelShapeTypeLinkedPicture
                 or ExcelShapeTypePicture
                 or ExcelShapeTypeGraphic
-                or ExcelShapeTypeLinkedGraphic;
+                or ExcelShapeTypeLinkedGraphic
+                or ExcelShapeTypeLine;
         }
         catch {
             return false;
@@ -1985,6 +2232,11 @@ public class SheetReaderService {
         catch {
         }
     }
+
+    private sealed record LinkedCellPosition(
+        string? SheetName,
+        int Row,
+        int Column);
 
     private sealed class CellColorRoles {
         public HashSet<string> InputColors { get; } = new(StringComparer.OrdinalIgnoreCase);
