@@ -260,7 +260,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 .FirstOrDefault(cell => cell.Row == row && cell.Column == column)
                 ?.DisplayText ?? string.Empty;
 
-        if (AreDropdownTextsEqual(originalValue, value))
+        if (string.Equals(NormalizeDropdownText(originalValue), NormalizeDropdownText(value),
+                StringComparison.OrdinalIgnoreCase))
             _pendingCellValues.Remove((row, column));
         else
             _pendingCellValues[(row, column)] = value;
@@ -591,29 +592,41 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             if (!dropdownsByPosition.TryGetValue(pendingValue.Key, out var changedDropdown))
                 continue;
 
-            var changedDisplayText = NormalizeDropdownText(GetCommittedCellValue(changedDropdown));
+            var changedPreviousValue = GetCommittedCellValue(changedDropdown);
+            var changedPreviousText = NormalizeDropdownText(changedPreviousValue);
             var selectedText = NormalizeDropdownText(pendingValue.Value);
-
-            if (string.IsNullOrWhiteSpace(selectedText))
-                continue;
+            var changedPreviousIndex = GetCommittedDropdownSelectedIndex(changedDropdown, changedPreviousValue);
+            var selectedIndex = GetDropdownSelectedIndex(changedDropdown, pendingValue.Value);
 
             foreach (var candidateDropdown in dropdownCells) {
                 if (candidateDropdown.Row == changedDropdown.Row &&
                     candidateDropdown.Column == changedDropdown.Column)
                     continue;
 
-                if (!DropdownContainsValue(candidateDropdown, pendingValue.Value))
-                    continue;
+                var candidatePreviousValue = GetCommittedCellValue(candidateDropdown);
+                var candidatePreviousText = NormalizeDropdownText(candidatePreviousValue);
+                var candidatePreviousIndex =
+                    GetCommittedDropdownSelectedIndex(candidateDropdown, candidatePreviousValue);
 
                 if (!ShouldSynchronizeDropdown(
                         changedDropdown,
                         candidateDropdown,
-                        changedDisplayText,
-                        NormalizeDropdownText(GetCommittedCellValue(candidateDropdown)),
-                        selectedText))
+                        changedPreviousText,
+                        candidatePreviousText,
+                        selectedText,
+                        changedPreviousIndex,
+                        candidatePreviousIndex,
+                        selectedIndex))
                     continue;
 
-                result[(candidateDropdown.Row, candidateDropdown.Column)] = pendingValue.Value;
+                if (!TryCreateSynchronizedDropdownValue(
+                        candidateDropdown,
+                        pendingValue.Value,
+                        selectedIndex,
+                        out var synchronizedValue))
+                    continue;
+
+                result[(candidateDropdown.Row, candidateDropdown.Column)] = synchronizedValue;
             }
         }
 
@@ -625,24 +638,95 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private static bool ShouldSynchronizeDropdown(
         CellModel changedDropdown,
         CellModel candidateDropdown,
-        string changedDisplayText,
-        string candidateDisplayText,
-        string selectedText) {
+        string changedPreviousText,
+        string candidatePreviousText,
+        string selectedText,
+        int changedPreviousIndex,
+        int candidatePreviousIndex,
+        int selectedIndex) {
         if (HaveSameInputTarget(changedDropdown, candidateDropdown))
             return true;
 
-        if (AreDropdownTextsEqual(candidateDisplayText, changedDisplayText))
+        if (HaveSameDropdownLinkedCell(changedDropdown, candidateDropdown))
+            return true;
+
+        if (HaveSameDropdownListSource(changedDropdown, candidateDropdown) &&
+            CanSynchronizeBySelectedIndex(
+                changedDropdown,
+                candidateDropdown,
+                changedPreviousIndex,
+                candidatePreviousIndex,
+                selectedIndex))
+            return true;
+
+        if (CanSynchronizeBySelectedIndex(
+                changedDropdown,
+                candidateDropdown,
+                changedPreviousIndex,
+                candidatePreviousIndex,
+                selectedIndex))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(changedPreviousText) &&
+            string.Equals(candidatePreviousText, changedPreviousText, StringComparison.OrdinalIgnoreCase))
             return true;
 
         if (!string.IsNullOrWhiteSpace(selectedText) &&
-            AreDropdownTextsEqual(candidateDisplayText, selectedText))
+            string.Equals(candidatePreviousText, selectedText, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        if (string.IsNullOrWhiteSpace(candidateDisplayText) &&
-            string.IsNullOrWhiteSpace(changedDisplayText))
+        if (string.IsNullOrWhiteSpace(candidatePreviousText) &&
+            string.IsNullOrWhiteSpace(changedPreviousText))
             return true;
 
         return false;
+    }
+
+    private static bool CanSynchronizeBySelectedIndex(
+        CellModel changedDropdown,
+        CellModel candidateDropdown,
+        int changedPreviousIndex,
+        int candidatePreviousIndex,
+        int selectedIndex) {
+        if (selectedIndex <= 0 || changedPreviousIndex <= 0 || candidatePreviousIndex <= 0)
+            return false;
+
+        if (candidatePreviousIndex != changedPreviousIndex)
+            return false;
+
+        return selectedIndex <= candidateDropdown.DropdownValues.Count;
+    }
+
+    private static bool TryCreateSynchronizedDropdownValue(
+        CellModel candidateDropdown,
+        string selectedValue,
+        int selectedIndex,
+        out string synchronizedValue) {
+        if (selectedIndex > 0 && selectedIndex <= candidateDropdown.DropdownValues.Count) {
+            synchronizedValue = candidateDropdown.DropdownValues[selectedIndex - 1];
+            return true;
+        }
+
+        if (DropdownContainsValue(candidateDropdown, selectedValue)) {
+            synchronizedValue = selectedValue;
+            return true;
+        }
+
+        synchronizedValue = string.Empty;
+        return false;
+    }
+
+    private static bool DropdownContainsValue(CellModel dropdown, string value) {
+        var normalizedValue = NormalizeDropdownText(value);
+
+        if (string.IsNullOrWhiteSpace(normalizedValue))
+            return false;
+
+        return dropdown.DropdownValues.Any(dropdownValue =>
+            string.Equals(
+                NormalizeDropdownText(dropdownValue),
+                normalizedValue,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool HaveSameInputTarget(CellModel firstDropdown, CellModel secondDropdown) {
@@ -660,29 +744,37 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                    StringComparison.OrdinalIgnoreCase);
     }
 
-    private static List<string> NormalizeDropdownValues(IEnumerable<string> values) {
-        return values
-            .Select(NormalizeDropdownText)
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .ToList();
+    private static bool HaveSameDropdownLinkedCell(CellModel firstDropdown, CellModel secondDropdown) {
+        return AreDropdownReferencesEqual(
+            firstDropdown.DropdownLinkedCellReference,
+            secondDropdown.DropdownLinkedCellReference);
     }
 
-    private static bool DropdownContainsValue(CellModel dropdown, string value) {
-        return dropdown.DropdownValues.Any(dropdownValue => AreDropdownTextsEqual(dropdownValue, value));
+    private static bool HaveSameDropdownListSource(CellModel firstDropdown, CellModel secondDropdown) {
+        return AreDropdownReferencesEqual(
+            firstDropdown.DropdownListSourceReference,
+            secondDropdown.DropdownListSourceReference);
     }
 
-    private static bool AreDropdownTextsEqual(string? firstValue, string? secondValue) {
-        var firstText = NormalizeDropdownText(firstValue);
-        var secondText = NormalizeDropdownText(secondValue);
+    private static bool AreDropdownReferencesEqual(string? firstReference, string? secondReference) {
+        var firstNormalizedReference = NormalizeDropdownReference(firstReference);
+        var secondNormalizedReference = NormalizeDropdownReference(secondReference);
 
-        if (string.Equals(firstText, secondText, StringComparison.OrdinalIgnoreCase))
-            return true;
+        return !string.IsNullOrWhiteSpace(firstNormalizedReference) &&
+               !string.IsNullOrWhiteSpace(secondNormalizedReference) &&
+               string.Equals(firstNormalizedReference, secondNormalizedReference, StringComparison.OrdinalIgnoreCase);
+    }
 
-        if (TryParseNumeric(firstText, out var firstNumber) &&
-            TryParseNumeric(secondText, out var secondNumber))
-            return Math.Abs(firstNumber - secondNumber) < 0.0000001;
+    private static string NormalizeDropdownReference(string? reference) {
+        if (string.IsNullOrWhiteSpace(reference))
+            return string.Empty;
 
-        return false;
+        var normalizedReference = reference.Trim();
+
+        if (normalizedReference.StartsWith('='))
+            normalizedReference = normalizedReference[1..].Trim();
+
+        return normalizedReference.Replace("$", string.Empty).Replace("''", "'").Trim();
     }
 
     private void WritePendingValues(
@@ -695,6 +787,14 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         foreach (var pendingValue in pendingValues) {
             cellModels.TryGetValue(pendingValue.Key, out var cellModel);
 
+            var previousValue = cellModel?.InputType == CellInputType.ComboBox
+                ? GetCommittedCellValue(cellModel)
+                : string.Empty;
+
+            var previousSelectedIndex = cellModel?.InputType == CellInputType.ComboBox
+                ? GetCommittedDropdownSelectedIndex(cellModel, previousValue)
+                : 0;
+
             var selectedIndex = cellModel?.InputType == CellInputType.ComboBox
                 ? GetDropdownSelectedIndex(cellModel, pendingValue.Value)
                 : 0;
@@ -705,9 +805,25 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                                                 pendingValue.Value,
                                                 selectedIndex);
 
+            if (dropdownControlWasWritten && cellModel?.InputType == CellInputType.ComboBox)
+                _excelSession.SynchronizeDropdownControlsByPreviousValue(
+                    cellModel,
+                    previousValue,
+                    previousSelectedIndex,
+                    pendingValue.Value,
+                    selectedIndex);
+
             var hasExplicitInputTarget = cellModel is { InputTargetRow: not null, InputTargetColumn: not null };
 
+            if (dropdownControlWasWritten && cellModel?.DropdownWritesSelectedIndex == true)
+                continue;
+
             if (dropdownControlWasWritten && !hasExplicitInputTarget)
+                continue;
+
+            if (cellModel?.InputType == CellInputType.ComboBox &&
+                cellModel.DropdownWritesSelectedIndex &&
+                selectedIndex <= 0)
                 continue;
 
             var targetRow = cellModel?.InputTargetRow ?? pendingValue.Key.Row;
@@ -740,17 +856,52 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 : text;
     }
 
+    private static int GetCommittedDropdownSelectedIndex(CellModel cellModel, string committedValue) {
+        if (cellModel.DropdownSelectedIndex is > 0)
+            return cellModel.DropdownSelectedIndex.Value;
+
+        return GetDropdownSelectedIndex(cellModel, committedValue);
+    }
+
     private static int GetDropdownSelectedIndex(CellModel cellModel, string selectedValue) {
         if (cellModel.DropdownValues.Count == 0 || string.IsNullOrWhiteSpace(selectedValue))
             return 0;
 
+        if (cellModel.DropdownWritesSelectedIndex &&
+            int.TryParse(selectedValue.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out var selectedNumericIndex) &&
+            selectedNumericIndex > 0 &&
+            selectedNumericIndex <= cellModel.DropdownValues.Count)
+            return selectedNumericIndex;
+
         var normalizedSelectedValue = NormalizeDropdownText(selectedValue);
 
         for (var index = 0; index < cellModel.DropdownValues.Count; index++)
-            if (AreDropdownTextsEqual(cellModel.DropdownValues[index], normalizedSelectedValue))
+            if (AreDropdownValuesEqual(cellModel.DropdownValues[index], selectedValue, normalizedSelectedValue))
                 return index + 1;
 
         return 0;
+    }
+
+    private static bool AreDropdownValuesEqual(
+        string? dropdownValue,
+        string selectedValue,
+        string normalizedSelectedValue) {
+        var normalizedDropdownValue = NormalizeDropdownText(dropdownValue);
+
+        if (string.Equals(normalizedDropdownValue, normalizedSelectedValue, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.Equals(
+                normalizedDropdownValue.Replace(" ", string.Empty),
+                normalizedSelectedValue.Replace(" ", string.Empty),
+                StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return !string.IsNullOrWhiteSpace(dropdownValue) &&
+               TryParseNumeric(dropdownValue, out var dropdownNumber) &&
+               TryParseNumeric(selectedValue, out var selectedNumber) &&
+               Math.Abs(dropdownNumber - selectedNumber) < 0.0000001;
     }
 
     private static string NormalizeDropdownText(string? value) {

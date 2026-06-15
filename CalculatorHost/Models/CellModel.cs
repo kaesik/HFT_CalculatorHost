@@ -48,4 +48,7 @@ public class CellModel {
     public string? DropdownControlName { get; set; }
     public bool IsActiveXDropdown { get; set; }
     public bool DropdownWritesSelectedIndex { get; set; }
+    public int? DropdownSelectedIndex { get; set; }
+    public string? DropdownListSourceReference { get; set; }
+    public string? DropdownLinkedCellReference { get; set; }
 }

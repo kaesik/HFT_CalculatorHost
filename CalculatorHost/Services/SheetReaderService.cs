@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -557,8 +558,12 @@ public class SheetReaderService {
     }
 
     private static object? GetRangeValue(object? values, int rowOffset, int columnOffset) {
-        if (values is not Array valuesArray || valuesArray.Rank != 2)
-            return rowOffset == 1 && columnOffset == 1 ? values : null;
+        if (values is not Array valuesArray || valuesArray.Rank != 2) {
+            if (rowOffset == 1 && columnOffset == 1)
+                return values;
+
+            return null;
+        }
 
         var rowIndex = valuesArray.GetLowerBound(0) + rowOffset - 1;
         var columnIndex = valuesArray.GetLowerBound(1) + columnOffset - 1;
@@ -1095,15 +1100,23 @@ public class SheetReaderService {
                         model,
                         colorRoles);
 
-                    var selectedValue = ReadSelectedFormControlValue((object)controlFormat, values);
-                    var inputTarget = ReadLinkedCellPosition((object)controlFormat, worksheetObject);
+                    var listSourceReference = ReadControlListSourceReference((object)controlFormat);
+                    var linkedCellReference = ReadControlLinkedCellReference((object)controlFormat);
+                    var linkedCellSelectedIndex = ReadLinkedCellSelectedIndex(linkedCellReference, worksheetObject);
+                    var selectedIndex = linkedCellSelectedIndex ?? ReadFormControlSelectedIndex((object)controlFormat);
+                    var selectedValue = GetDropdownValueBySelectedIndex(selectedIndex, values)
+                                        ?? ReadSelectedFormControlValue((object)controlFormat, values);
+                    var inputTarget = ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
 
                     ApplyDropdownValues(
                         cellModel,
                         values,
                         selectedValue,
                         inputTarget,
-                        inputTarget != null);
+                        inputTarget != null,
+                        selectedIndex,
+                        listSourceReference,
+                        linkedCellReference);
 
                     cellModel.DropdownControlName = Convert.ToString(shape.Name);
                     cellModel.IsActiveXDropdown = false;
@@ -1167,16 +1180,23 @@ public class SheetReaderService {
                         model,
                         colorRoles);
 
+                    var selectedIndex = ReadActiveXSelectedIndex((object)control);
                     var selectedValue = ReadActiveXSelectedValue((object)control);
-                    var inputTarget = ReadLinkedCellPosition((object)embeddedObject, worksheetObject)
-                                      ?? ReadLinkedCellPosition((object)control, worksheetObject);
+                    var listSourceReference = ReadControlListSourceReference((object)embeddedObject)
+                                              ?? ReadControlListSourceReference((object)control);
+                    var linkedCellReference = ReadControlLinkedCellReference((object)embeddedObject)
+                                              ?? ReadControlLinkedCellReference((object)control);
+                    var inputTarget = ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
 
                     ApplyDropdownValues(
                         cellModel,
                         values,
                         selectedValue,
                         inputTarget,
-                        false);
+                        false,
+                        selectedIndex,
+                        listSourceReference,
+                        linkedCellReference);
 
                     cellModel.DropdownControlName = Convert.ToString(embeddedObject.Name);
                     cellModel.IsActiveXDropdown = true;
@@ -1385,10 +1405,12 @@ public class SheetReaderService {
 
     private static List<string> BuildEvaluationExpressions(string source) {
         var expressions = new List<string>();
+        var evaluationSource = source.StartsWith('=')
+            ? source
+            : $"={source}";
 
-        TryAddExpression(expressions, source.StartsWith('=') ? source : $"={source}");
-        TryAddExpression(expressions, NormalizeDynamicArrayFormula(
-            source.StartsWith('=') ? source : $"={source}"));
+        TryAddExpression(expressions, evaluationSource);
+        TryAddExpression(expressions, NormalizeDynamicArrayFormula(evaluationSource));
 
         return expressions;
     }
@@ -1541,14 +1563,165 @@ public class SheetReaderService {
     private static List<string> ReadControlFillRangeValues(
         object controlObject,
         object worksheetObject) {
+        var fillRange = ReadControlListSourceReference(controlObject);
+
+        return string.IsNullOrWhiteSpace(fillRange)
+            ? []
+            : ReadDropdownSourceValues(fillRange, worksheetObject);
+    }
+
+    private static string? ReadControlListSourceReference(object controlObject) {
         dynamic control = controlObject;
 
         try {
             var fillRange = Convert.ToString(control.ListFillRange);
-            return ReadDropdownSourceValues(fillRange, worksheetObject);
+
+            if (!string.IsNullOrWhiteSpace(fillRange))
+                return fillRange;
         }
         catch {
-            return [];
+        }
+
+        try {
+            var source = Convert.ToString(control.Source);
+
+            return string.IsNullOrWhiteSpace(source)
+                ? null
+                : source;
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private static string? ReadControlLinkedCellReference(object controlObject) {
+        dynamic control = controlObject;
+
+        try {
+            var linkedCell = Convert.ToString(control.LinkedCell);
+
+            return string.IsNullOrWhiteSpace(linkedCell)
+                ? null
+                : linkedCell;
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private static int? ReadFormControlSelectedIndex(object controlFormatObject) {
+        dynamic controlFormat = controlFormatObject;
+
+        try {
+            var selectedIndex = Convert.ToInt32(controlFormat.Value);
+
+            return selectedIndex > 0
+                ? selectedIndex
+                : null;
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private static int? ReadLinkedCellSelectedIndex(string? linkedCellReference, object worksheetObject) {
+        if (string.IsNullOrWhiteSpace(linkedCellReference))
+            return null;
+
+        dynamic worksheet = worksheetObject;
+        dynamic? workbook = null;
+        dynamic? worksheets = null;
+        dynamic? linkedWorksheet = null;
+        dynamic? linkedCell = null;
+        dynamic? application = null;
+
+        try {
+            var reference = NormalizeExcelReference(linkedCellReference);
+
+            if (string.IsNullOrWhiteSpace(reference))
+                return null;
+
+            var hasWorksheetReference = TrySplitWorksheetReference(
+                reference,
+                out var worksheetName,
+                out var cellReference);
+
+            if (hasWorksheetReference && !string.IsNullOrWhiteSpace(worksheetName)) {
+                workbook = worksheet.Parent;
+                worksheets = workbook.Worksheets;
+                linkedWorksheet = worksheets[worksheetName];
+                linkedCell = linkedWorksheet.Range[cellReference];
+            }
+            else
+                try {
+                    linkedCell = worksheet.Range[cellReference];
+                }
+                catch {
+                    application = worksheet.Application;
+                    linkedCell = application.Range[cellReference];
+                }
+
+            return TryReadPositiveIntegerIndex(linkedCell.Value2);
+        }
+        catch {
+            return null;
+        }
+        finally {
+            application = null;
+            ReleaseComObject(linkedCell);
+            ReleaseComObject(linkedWorksheet);
+            ReleaseComObject(worksheets);
+            ReleaseComObject(workbook);
+        }
+    }
+
+    private static int? TryReadPositiveIntegerIndex(object? value) {
+        if (value == null)
+            return null;
+
+        if (value is int integerValue)
+            return integerValue > 0 ? integerValue : null;
+
+        if (value is double doubleValue) {
+            var roundedValue = Math.Round(doubleValue);
+
+            return doubleValue > 0 && Math.Abs(doubleValue - roundedValue) < 0.0000001
+                ? Convert.ToInt32(roundedValue)
+                : null;
+        }
+
+        var text = Convert.ToString(value);
+
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        if (int.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var integerIndex))
+            return integerIndex > 0 ? integerIndex : null;
+
+        var normalizedText = text.Trim().Replace(',', '.');
+
+        if (!double.TryParse(normalizedText, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+            return null;
+
+        var roundedNumber = Math.Round(number);
+
+        return number > 0 && Math.Abs(number - roundedNumber) < 0.0000001
+            ? Convert.ToInt32(roundedNumber)
+            : null;
+    }
+
+    private static int? ReadActiveXSelectedIndex(object controlObject) {
+        dynamic control = controlObject;
+
+        try {
+            var selectedIndex = Convert.ToInt32(control.ListIndex) + 1;
+
+            return selectedIndex > 0
+                ? selectedIndex
+                : null;
+        }
+        catch {
+            return null;
         }
     }
 
@@ -1569,6 +1742,13 @@ public class SheetReaderService {
         }
     }
 
+    private static string? GetDropdownValueBySelectedIndex(int? selectedIndex, IReadOnlyList<string> values) {
+        if (!selectedIndex.HasValue || selectedIndex.Value <= 0 || selectedIndex.Value > values.Count)
+            return null;
+
+        return values[selectedIndex.Value - 1];
+    }
+
     private static string? ReadActiveXSelectedValue(object controlObject) {
         dynamic control = controlObject;
 
@@ -1583,23 +1763,13 @@ public class SheetReaderService {
     private static LinkedCellPosition? ReadLinkedCellPosition(
         object controlObject,
         object worksheetObject) {
-        dynamic control = controlObject;
+        var linkedCellReference = ReadControlLinkedCellReference(controlObject);
 
-        try {
-            var linkedCellReference = Convert.ToString(control.LinkedCell);
-
-            if (string.IsNullOrWhiteSpace(linkedCellReference))
-                return null;
-
-            return ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
-        }
-        catch {
-            return null;
-        }
+        return ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
     }
 
     private static LinkedCellPosition? ReadLinkedCellPositionFromReference(
-        string linkedCellReference,
+        string? linkedCellReference,
         object worksheetObject) {
         dynamic worksheet = worksheetObject;
         dynamic? workbook = null;
@@ -1653,7 +1823,10 @@ public class SheetReaderService {
         }
     }
 
-    private static string NormalizeExcelReference(string reference) {
+    private static string NormalizeExcelReference(string? reference) {
+        if (string.IsNullOrWhiteSpace(reference))
+            return string.Empty;
+
         var normalizedReference = reference.Trim();
 
         if (normalizedReference.StartsWith("=", StringComparison.Ordinal))
@@ -1723,7 +1896,10 @@ public class SheetReaderService {
         IEnumerable<string> values,
         string? selectedValue,
         LinkedCellPosition? inputTarget,
-        bool dropdownWritesSelectedIndex) {
+        bool dropdownWritesSelectedIndex,
+        int? selectedIndex = null,
+        string? listSourceReference = null,
+        string? linkedCellReference = null) {
         model.IsInput = true;
         model.InputType = CellInputType.ComboBox;
         model.DropdownValues = values
@@ -1734,10 +1910,25 @@ public class SheetReaderService {
         model.InputTargetRow = inputTarget?.Row;
         model.InputTargetColumn = inputTarget?.Column;
         model.InputTargetSheetName = inputTarget?.SheetName;
+        model.InputTargetFormulaText = NormalizeStoredDropdownReference(linkedCellReference);
         model.DropdownWritesSelectedIndex = dropdownWritesSelectedIndex;
+        model.DropdownSelectedIndex = selectedIndex > 0 ? selectedIndex : null;
+        model.DropdownListSourceReference = NormalizeStoredDropdownReference(listSourceReference);
+        model.DropdownLinkedCellReference = NormalizeStoredDropdownReference(linkedCellReference);
 
         if (!string.IsNullOrWhiteSpace(selectedValue))
             model.DisplayText = selectedValue;
+    }
+
+    private static string? NormalizeStoredDropdownReference(string? reference) {
+        if (string.IsNullOrWhiteSpace(reference))
+            return null;
+
+        var normalizedReference = reference.Trim();
+
+        return string.IsNullOrWhiteSpace(normalizedReference)
+            ? null
+            : normalizedReference;
     }
 
     private static List<string> ExtractValidationValues(object? source) {
@@ -1909,9 +2100,12 @@ public class SheetReaderService {
                         continue;
 
                     var label = ReadActiveXCaption((object)control);
+                    var displayLabel = string.IsNullOrWhiteSpace(label)
+                        ? name
+                        : label;
 
                     model.MacroButtons.Add(new MacroButtonConfig {
-                        Label = string.IsNullOrWhiteSpace(label) ? name : label,
+                        Label = displayLabel,
                         MacroName = name,
                         Tooltip = $"Uruchamia przycisk ActiveX: {name}",
                         OleObjectName = name,
@@ -2223,14 +2417,6 @@ public class SheetReaderService {
     }
 
     private static void ReleaseComObject(object? comObject) {
-        if (comObject == null || !Marshal.IsComObject(comObject))
-            return;
-
-        try {
-            Marshal.FinalReleaseComObject(comObject);
-        }
-        catch {
-        }
     }
 
     private sealed record LinkedCellPosition(
