@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -281,6 +280,7 @@ public class SheetRenderer {
                 button.Style = style;
         }
         catch {
+            // ignored
         }
 
         button.Click += (_, _) => onMacroButtonClicked(macroButton);
@@ -449,13 +449,7 @@ public class SheetRenderer {
             if (comboBox.SelectedItem is not string selectedValue)
                 return;
 
-            var inputRow = cell.InputTargetRow ?? cell.Row;
-            var inputColumn = cell.InputTargetColumn ?? cell.Column;
-            var inputValue = cell.DropdownWritesSelectedIndex
-                ? (comboBox.SelectedIndex + 1).ToString(CultureInfo.InvariantCulture)
-                : selectedValue;
-
-            onInputChanged(inputRow, inputColumn, inputValue);
+            onInputChanged(cell.Row, cell.Column, selectedValue);
         };
 
         renderedSheet.ComboBoxControls[(cell.Row, cell.Column)] = comboBox;

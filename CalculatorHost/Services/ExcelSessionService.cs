@@ -22,6 +22,7 @@ public class ExcelSessionService : IDisposable {
                 _application.Quit();
             }
             catch {
+                // ignored
             }
             finally {
                 ReleaseComObject(_application);
@@ -86,8 +87,7 @@ public class ExcelSessionService : IDisposable {
     }
 
     private void ExecuteWithEventsState(Action action, bool enableEvents) {
-        if (action == null)
-            throw new ArgumentNullException(nameof(action));
+        ArgumentNullException.ThrowIfNull(action);
 
         if (_application == null || _workbook == null)
             throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
@@ -99,6 +99,7 @@ public class ExcelSessionService : IDisposable {
             _application.EnableEvents = enableEvents;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -110,6 +111,7 @@ public class ExcelSessionService : IDisposable {
                     _application.EnableEvents = previousEnableEvents.Value;
                 }
                 catch {
+                    // ignored
                 }
         }
     }
@@ -208,6 +210,7 @@ public class ExcelSessionService : IDisposable {
                         wasSynchronized = true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(worksheet);
@@ -222,6 +225,23 @@ public class ExcelSessionService : IDisposable {
         finally {
             ReleaseComObject(worksheets);
         }
+    }
+
+    public bool TryRunDropdownControlAssignedMacro(
+        CellModel cellModel,
+        string selectedValue,
+        int selectedIndex) {
+        if (_application == null || _workbook == null)
+            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+
+        if (cellModel.IsActiveXDropdown)
+            return false;
+
+        return TryWriteFormControlDropdownValue(
+            cellModel,
+            selectedValue,
+            selectedIndex,
+            true);
     }
 
     private static bool TrySynchronizeFormControlDropdownsOnWorksheet(
@@ -258,6 +278,7 @@ public class ExcelSessionService : IDisposable {
                         wasSynchronized = true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(shape);
@@ -341,6 +362,7 @@ public class ExcelSessionService : IDisposable {
                 return Convert.ToString(controlFormat.List[selectedIndex]);
         }
         catch {
+            // ignored
         }
 
         try {
@@ -381,6 +403,7 @@ public class ExcelSessionService : IDisposable {
                         return true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(worksheet);
@@ -460,6 +483,7 @@ public class ExcelSessionService : IDisposable {
                         return true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(shape);
@@ -506,6 +530,7 @@ public class ExcelSessionService : IDisposable {
                     controlFormat.Value = resolvedSelectedIndex;
                 }
                 catch {
+                    // ignored
                 }
 
                 TryWriteControlLinkedCell((object)shape, cellModel, resolvedSelectedIndex);
@@ -562,6 +587,7 @@ public class ExcelSessionService : IDisposable {
                     return index;
         }
         catch {
+            // ignored
         }
 
         if (fallbackSelectedIndex > 0)
@@ -608,6 +634,7 @@ public class ExcelSessionService : IDisposable {
                         wasSynchronized = true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(embeddedObject);
@@ -657,6 +684,7 @@ public class ExcelSessionService : IDisposable {
                     wasWritten = true;
                 }
                 catch {
+                    // ignored
                 }
 
             try {
@@ -664,6 +692,7 @@ public class ExcelSessionService : IDisposable {
                 wasWritten = true;
             }
             catch {
+                // ignored
             }
 
             if (!wasWritten)
@@ -703,6 +732,7 @@ public class ExcelSessionService : IDisposable {
                 return currentValue;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -713,6 +743,7 @@ public class ExcelSessionService : IDisposable {
                 return Convert.ToString(control.List[selectedIndex]);
         }
         catch {
+            // ignored
         }
 
         return null;
@@ -744,6 +775,7 @@ public class ExcelSessionService : IDisposable {
                         return true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(worksheet);
@@ -819,6 +851,7 @@ public class ExcelSessionService : IDisposable {
                         return true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(embeddedObject);
@@ -855,6 +888,7 @@ public class ExcelSessionService : IDisposable {
                     wasWritten = true;
                 }
                 catch {
+                    // ignored
                 }
 
             try {
@@ -862,6 +896,7 @@ public class ExcelSessionService : IDisposable {
                 wasWritten = true;
             }
             catch {
+                // ignored
             }
 
             if (wasWritten) {
@@ -895,6 +930,7 @@ public class ExcelSessionService : IDisposable {
                 return true;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -931,6 +967,7 @@ public class ExcelSessionService : IDisposable {
                     return index + 1;
         }
         catch {
+            // ignored
         }
 
         if (fallbackSelectedIndex > 0)
@@ -967,6 +1004,7 @@ public class ExcelSessionService : IDisposable {
                 return;
             }
             catch {
+                // ignored
             }
 
             if (macroName.Contains('!'))
@@ -981,6 +1019,7 @@ public class ExcelSessionService : IDisposable {
             application.Run($"'{workbookName.Replace("'", "''")}'!{macroName}");
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(workbook);
@@ -1180,6 +1219,7 @@ public class ExcelSessionService : IDisposable {
             linkedCellReference = Convert.ToString(control.LinkedCell) ?? string.Empty;
         }
         catch {
+            // ignored
         }
 
         if (!string.IsNullOrWhiteSpace(linkedCellReference))
@@ -1190,6 +1230,7 @@ public class ExcelSessionService : IDisposable {
             linkedCellReference = Convert.ToString(controlFormat.LinkedCell) ?? string.Empty;
         }
         catch {
+            // ignored
         }
 
         return !string.IsNullOrWhiteSpace(linkedCellReference);
@@ -1298,6 +1339,7 @@ public class ExcelSessionService : IDisposable {
                 return parent;
             }
             catch {
+                // ignored
             }
 
             try {
@@ -1533,24 +1575,28 @@ public class ExcelSessionService : IDisposable {
             _application.Calculation = ExcelCalculationManual;
         }
         catch {
+            // ignored
         }
 
         try {
             _application.AskToUpdateLinks = false;
         }
         catch {
+            // ignored
         }
 
         try {
             _application.DisplayFormulaBar = false;
         }
         catch {
+            // ignored
         }
 
         try {
             _application.DisplayStatusBar = false;
         }
         catch {
+            // ignored
         }
     }
 
@@ -1611,6 +1657,7 @@ public class ExcelSessionService : IDisposable {
                 }
             }
             catch {
+                // ignored
             }
 
             try {
@@ -1642,6 +1689,7 @@ public class ExcelSessionService : IDisposable {
             _workbook.Close(false);
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(_workbook);

@@ -43,7 +43,6 @@ public partial class MainWindow {
             _activeCalculatorViewModel = new CalculatorViewModel(
                 session,
                 reader,
-                macroConfig,
                 workingCopy,
                 sheetLayoutCache,
                 App.ExcelWorker);

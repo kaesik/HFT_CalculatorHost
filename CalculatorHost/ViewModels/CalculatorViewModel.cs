@@ -33,7 +33,6 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     public CalculatorViewModel(
         ExcelSessionService excelSession,
         SheetReaderService sheetReader,
-        MacroConfigService macroConfig,
         WorkingCopyService workingCopy,
         SheetLayoutCacheService sheetLayoutCache,
         ExcelWorker worker) {
@@ -141,6 +140,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             }).Wait(TimeSpan.FromSeconds(15));
         }
         catch {
+            // ignored
         }
 
         _workingCopy.CleanCurrentSession();
@@ -598,27 +598,23 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             var changedPreviousIndex = GetCommittedDropdownSelectedIndex(changedDropdown, changedPreviousValue);
             var selectedIndex = GetDropdownSelectedIndex(changedDropdown, pendingValue.Value);
 
-            foreach (var candidateDropdown in dropdownCells) {
-                if (candidateDropdown.Row == changedDropdown.Row &&
-                    candidateDropdown.Column == changedDropdown.Column)
-                    continue;
-
-                var candidatePreviousValue = GetCommittedCellValue(candidateDropdown);
-                var candidatePreviousText = NormalizeDropdownText(candidatePreviousValue);
-                var candidatePreviousIndex =
-                    GetCommittedDropdownSelectedIndex(candidateDropdown, candidatePreviousValue);
-
-                if (!ShouldSynchronizeDropdown(
-                        changedDropdown,
-                        candidateDropdown,
-                        changedPreviousText,
-                        candidatePreviousText,
-                        selectedText,
-                        changedPreviousIndex,
-                        candidatePreviousIndex,
-                        selectedIndex))
-                    continue;
-
+            foreach (var candidateDropdown in from candidateDropdown in dropdownCells
+                     where candidateDropdown.Row != changedDropdown.Row ||
+                           candidateDropdown.Column != changedDropdown.Column
+                     let candidatePreviousValue = GetCommittedCellValue(candidateDropdown)
+                     let candidatePreviousText = NormalizeDropdownText(candidatePreviousValue)
+                     let candidatePreviousIndex =
+                         GetCommittedDropdownSelectedIndex(candidateDropdown, candidatePreviousValue)
+                     where ShouldSynchronizeDropdown(
+                         changedDropdown,
+                         candidateDropdown,
+                         changedPreviousText,
+                         candidatePreviousText,
+                         selectedText,
+                         changedPreviousIndex,
+                         candidatePreviousIndex,
+                         selectedIndex)
+                     select candidateDropdown) {
                 if (!TryCreateSynchronizedDropdownValue(
                         candidateDropdown,
                         pendingValue.Value,
@@ -675,11 +671,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             string.Equals(candidatePreviousText, selectedText, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        if (string.IsNullOrWhiteSpace(candidatePreviousText) &&
-            string.IsNullOrWhiteSpace(changedPreviousText))
-            return true;
-
-        return false;
+        return string.IsNullOrWhiteSpace(candidatePreviousText) &&
+               string.IsNullOrWhiteSpace(changedPreviousText);
     }
 
     private static bool CanSynchronizeBySelectedIndex(
@@ -779,12 +772,14 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
     private void WritePendingValues(
         IEnumerable<KeyValuePair<(int Row, int Column), string>> pendingValues) {
+        var pendingValuesList = pendingValues.ToList();
         var cellModels = SheetModel?.Cells
                              .Where(cell => !cell.IsMergedSlave)
                              .ToDictionary(cell => (cell.Row, cell.Column), cell => cell)
                          ?? [];
+        var writtenDropdowns = new List<PendingDropdownWrite>();
 
-        foreach (var pendingValue in pendingValues) {
+        foreach (var pendingValue in pendingValuesList) {
             cellModels.TryGetValue(pendingValue.Key, out var cellModel);
 
             var previousValue = cellModel?.InputType == CellInputType.ComboBox
@@ -803,9 +798,10 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                                             _excelSession.TryWriteDropdownControlValue(
                                                 cellModel,
                                                 pendingValue.Value,
-                                                selectedIndex);
+                                                selectedIndex,
+                                                false);
 
-            if (dropdownControlWasWritten && cellModel?.InputType == CellInputType.ComboBox)
+            if (dropdownControlWasWritten && cellModel?.InputType == CellInputType.ComboBox) {
                 _excelSession.SynchronizeDropdownControlsByPreviousValue(
                     cellModel,
                     previousValue,
@@ -813,13 +809,21 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                     pendingValue.Value,
                     selectedIndex);
 
+                writtenDropdowns.Add(new PendingDropdownWrite(
+                    cellModel,
+                    previousValue,
+                    previousSelectedIndex,
+                    pendingValue.Value,
+                    selectedIndex));
+            }
+
             var hasExplicitInputTarget = cellModel is { InputTargetRow: not null, InputTargetColumn: not null };
 
-            if (dropdownControlWasWritten && cellModel?.DropdownWritesSelectedIndex == true)
-                continue;
-
-            if (dropdownControlWasWritten && !hasExplicitInputTarget)
-                continue;
+            switch (dropdownControlWasWritten) {
+                case true when cellModel?.DropdownWritesSelectedIndex == true:
+                case true when !hasExplicitInputTarget:
+                    continue;
+            }
 
             if (cellModel?.InputType == CellInputType.ComboBox &&
                 cellModel.DropdownWritesSelectedIndex &&
@@ -837,6 +841,52 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 value,
                 targetSheetName);
         }
+
+        RunPendingDropdownMacros(writtenDropdowns);
+    }
+
+    private void RunPendingDropdownMacros(List<PendingDropdownWrite> writtenDropdowns) {
+        if (writtenDropdowns.Count == 0)
+            return;
+
+        var executedDropdownKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var writtenDropdown in from writtenDropdown in writtenDropdowns
+                 let dropdownKey = CreateDropdownMacroExecutionKey(writtenDropdown.CellModel)
+                 where executedDropdownKeys.Add(dropdownKey)
+                 where _excelSession.TryRunDropdownControlAssignedMacro(
+                     writtenDropdown.CellModel,
+                     writtenDropdown.SelectedValue,
+                     writtenDropdown.SelectedIndex)
+                 select writtenDropdown) {
+            _excelSession.TryWriteDropdownControlValue(
+                writtenDropdown.CellModel,
+                writtenDropdown.SelectedValue,
+                writtenDropdown.SelectedIndex,
+                false);
+
+            _excelSession.SynchronizeDropdownControlsByPreviousValue(
+                writtenDropdown.CellModel,
+                writtenDropdown.PreviousValue,
+                writtenDropdown.PreviousSelectedIndex,
+                writtenDropdown.SelectedValue,
+                writtenDropdown.SelectedIndex);
+        }
+    }
+
+    private static string CreateDropdownMacroExecutionKey(CellModel cellModel) {
+        var linkedCellReference = NormalizeDropdownReference(cellModel.DropdownLinkedCellReference);
+
+        if (!string.IsNullOrWhiteSpace(linkedCellReference))
+            return $"LinkedCell:{linkedCellReference}";
+
+        if (cellModel is { InputTargetRow: not null, InputTargetColumn: not null })
+            return
+                $"InputTarget:{cellModel.InputTargetSheetName ?? string.Empty}:{cellModel.InputTargetRow}:{cellModel.InputTargetColumn}";
+
+        return !string.IsNullOrWhiteSpace(cellModel.DropdownControlName)
+            ? $"Control:{cellModel.DropdownControlName}"
+            : $"Cell:{cellModel.Row}:{cellModel.Column}";
     }
 
     private static object? CreateExcelInputValue(CellModel? cellModel, string text, int selectedIndex = 0) {
@@ -983,4 +1033,11 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private void OnPropertyChanged([CallerMemberName] string? name = null) {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
+
+    private sealed record PendingDropdownWrite(
+        CellModel CellModel,
+        string PreviousValue,
+        int PreviousSelectedIndex,
+        string SelectedValue,
+        int SelectedIndex);
 }
