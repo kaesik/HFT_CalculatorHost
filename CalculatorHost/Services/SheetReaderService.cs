@@ -8,6 +8,12 @@ using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
 
+public enum SheetRefreshMode {
+    ValuesOnly,
+    ValuesAndImages,
+    Full
+}
+
 public class SheetReaderService {
     private const double PointsToDips = 96.0 / 72.0;
 
@@ -37,7 +43,6 @@ public class SheetReaderService {
     private const int ExcelCopyPictureFormatBitmap = 2;
     private const int MaximumClipboardReadAttempts = 5;
     private const int ClipboardRetryDelayMilliseconds = 20;
-    private const int ExcelFormControlTypeButton = 0;
     private const int ExcelFormControlTypeDropdown = 2;
     private const int ExcelFormControlTypeListBox = 6;
     private const int ExcelCellControlTypeNone = 0;
@@ -125,7 +130,10 @@ public class SheetReaderService {
         }
     }
 
-    public SheetModel RefreshCellValues(ExcelSessionService session, SheetModel model) {
+    public SheetModel RefreshCellValues(
+        ExcelSessionService session,
+        SheetModel model,
+        SheetRefreshMode refreshMode = SheetRefreshMode.Full) {
         dynamic? worksheet = null;
         dynamic? cells = null;
 
@@ -159,11 +167,14 @@ public class SheetReaderService {
                 }
             }
 
-            var colorRoles = ReadColorRoles((object)worksheet);
+            if (refreshMode == SheetRefreshMode.Full) {
+                var colorRoles = ReadColorRoles((object)worksheet);
 
-            ReadDropdownElements((object)worksheet, model, colorRoles);
-            ReadImages((object)worksheet, model);
-            ReadMacroButtons((object)worksheet, model);
+                ReadDropdownElements((object)worksheet, model, colorRoles);
+                ReadImages((object)worksheet, model);
+                ReadMacroButtons((object)worksheet, model);
+            }
+            else if (refreshMode == SheetRefreshMode.ValuesAndImages) ReadImages((object)worksheet, model);
 
             return model;
         }
@@ -674,6 +685,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(font);
@@ -689,6 +701,7 @@ public class SheetReaderService {
             model.WrapText = Convert.ToBoolean(cell.WrapText);
         }
         catch {
+            // ignored
         }
     }
 
@@ -709,6 +722,7 @@ public class SheetReaderService {
             ApplyBordersFromCollection(borders, model, ref dominantColor);
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(borders);
@@ -720,6 +734,7 @@ public class SheetReaderService {
             ApplyBordersFromCollection(displayBorders, model, ref dominantColor);
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(displayBorders);
@@ -737,6 +752,7 @@ public class SheetReaderService {
             ApplyBordersFromCollection(mergeBorders, model, ref dominantColor);
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(mergeBorders);
@@ -750,6 +766,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(mergeDisplayBorders);
@@ -811,6 +828,7 @@ public class SheetReaderService {
                 dominantColor = OleColorToMediaColor(Convert.ToInt32(border.Color));
             }
             catch {
+                // ignored
             }
 
             try {
@@ -846,6 +864,7 @@ public class SheetReaderService {
             model.ColSpan = Convert.ToInt32(columns.Count);
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(columns);
@@ -900,6 +919,7 @@ public class SheetReaderService {
                         false);
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(cellControl);
@@ -908,6 +928,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(cells);
@@ -929,6 +950,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -939,6 +961,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -948,6 +971,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -957,6 +981,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -966,6 +991,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         return [];
@@ -1014,6 +1040,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(cells);
@@ -1038,6 +1065,7 @@ public class SheetReaderService {
                     ReadValidation((object)cell, cellModel, worksheetObject);
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(cell);
@@ -1045,6 +1073,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(cells);
@@ -1122,6 +1151,7 @@ public class SheetReaderService {
                     cellModel.IsActiveXDropdown = false;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(topLeftCell);
@@ -1131,6 +1161,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(shapes);
@@ -1202,6 +1233,7 @@ public class SheetReaderService {
                     cellModel.IsActiveXDropdown = true;
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(topLeftCell);
@@ -1211,6 +1243,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(objects);
@@ -1242,6 +1275,7 @@ public class SheetReaderService {
             cellModel.RawValue = cell.Value2;
         }
         catch {
+            // ignored
         }
 
         ReadDisplayText(cellObject, cellModel);
@@ -1277,6 +1311,7 @@ public class SheetReaderService {
                 TryAddValidationFormula(formulas, Convert.ToString(validation.Formula1Local));
             }
             catch {
+                // ignored
             }
 
             foreach (var formula in formulas) {
@@ -1290,6 +1325,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(validation);
@@ -1381,10 +1417,9 @@ public class SheetReaderService {
             return formula;
 
         dynamic worksheet = worksheetObject;
-        dynamic? application = null;
 
         try {
-            application = worksheet.Application;
+            var application = worksheet.Application;
 
             var convertedFormula = application.ConvertFormula(
                 formula,
@@ -1397,9 +1432,6 @@ public class SheetReaderService {
         }
         catch {
             return formula;
-        }
-        finally {
-            application = null;
         }
     }
 
@@ -1440,7 +1472,7 @@ public class SheetReaderService {
         string formula,
         object worksheetObject) {
         dynamic worksheet = worksheetObject;
-        dynamic? application = null;
+        dynamic? application;
         object? evaluatedValue = null;
 
         try {
@@ -1452,6 +1484,7 @@ public class SheetReaderService {
                     return values;
             }
             catch {
+                // ignored
             }
             finally {
                 ReleaseComObject(evaluatedValue);
@@ -1468,7 +1501,6 @@ public class SheetReaderService {
         }
         finally {
             ReleaseComObject(evaluatedValue);
-            application = null;
         }
     }
 
@@ -1486,10 +1518,10 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(range);
-            range = null;
         }
 
         foreach (var expression in BuildEvaluationExpressions(reference)) {
@@ -1518,6 +1550,7 @@ public class SheetReaderService {
                 AddDropdownValue(values, Convert.ToString(controlFormat.List[index]));
         }
         catch {
+            // ignored
         }
 
         return values;
@@ -1546,6 +1579,7 @@ public class SheetReaderService {
                 return values;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -1555,6 +1589,7 @@ public class SheetReaderService {
                 AddDropdownValue(values, Convert.ToString(control.List[index]));
         }
         catch {
+            // ignored
         }
 
         return values;
@@ -1580,6 +1615,7 @@ public class SheetReaderService {
                 return fillRange;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -1633,7 +1669,6 @@ public class SheetReaderService {
         dynamic? worksheets = null;
         dynamic? linkedWorksheet = null;
         dynamic? linkedCell = null;
-        dynamic? application = null;
 
         try {
             var reference = NormalizeExcelReference(linkedCellReference);
@@ -1657,7 +1692,7 @@ public class SheetReaderService {
                     linkedCell = worksheet.Range[cellReference];
                 }
                 catch {
-                    application = worksheet.Application;
+                    var application = worksheet.Application;
                     linkedCell = application.Range[cellReference];
                 }
 
@@ -1667,7 +1702,6 @@ public class SheetReaderService {
             return null;
         }
         finally {
-            application = null;
             ReleaseComObject(linkedCell);
             ReleaseComObject(linkedWorksheet);
             ReleaseComObject(worksheets);
@@ -1760,23 +1794,13 @@ public class SheetReaderService {
         }
     }
 
-    private static LinkedCellPosition? ReadLinkedCellPosition(
-        object controlObject,
-        object worksheetObject) {
-        var linkedCellReference = ReadControlLinkedCellReference(controlObject);
-
-        return ReadLinkedCellPositionFromReference(linkedCellReference, worksheetObject);
-    }
-
     private static LinkedCellPosition? ReadLinkedCellPositionFromReference(
         string? linkedCellReference,
         object worksheetObject) {
         dynamic worksheet = worksheetObject;
-        dynamic? workbook = null;
         dynamic? worksheets = null;
         dynamic? linkedWorksheet = null;
         dynamic? linkedCell = null;
-        dynamic? application = null;
 
         try {
             var reference = NormalizeExcelReference(linkedCellReference);
@@ -1790,7 +1814,7 @@ public class SheetReaderService {
                 out var cellReference);
 
             if (hasWorksheetReference && !string.IsNullOrWhiteSpace(worksheetName)) {
-                workbook = worksheet.Parent;
+                var workbook = worksheet.Parent;
                 worksheets = workbook.Worksheets;
                 linkedWorksheet = worksheets[worksheetName];
                 linkedCell = linkedWorksheet.Range[cellReference];
@@ -1800,7 +1824,7 @@ public class SheetReaderService {
                     linkedCell = worksheet.Range[cellReference];
                 }
                 catch {
-                    application = worksheet.Application;
+                    var application = worksheet.Application;
                     linkedCell = application.Range[cellReference];
                 }
 
@@ -1816,7 +1840,6 @@ public class SheetReaderService {
             return null;
         }
         finally {
-            application = null;
             ReleaseComObject(linkedCell);
             ReleaseComObject(linkedWorksheet);
             ReleaseComObject(worksheets);
@@ -1978,6 +2001,7 @@ public class SheetReaderService {
     }
 
     private static void ReadMacroButtons(object worksheetObject, SheetModel model) {
+        model.MacroButtons.Clear();
         ReadShapeMacroButtons(worksheetObject, model);
         ReadActiveXCommandButtons(worksheetObject, model);
     }
@@ -2040,6 +2064,7 @@ public class SheetReaderService {
                     });
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(shape);
@@ -2047,6 +2072,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(originCell);
@@ -2120,6 +2146,7 @@ public class SheetReaderService {
                     });
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(control);
@@ -2128,6 +2155,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(originCell);
@@ -2165,6 +2193,7 @@ public class SheetReaderService {
                 return true;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -2189,6 +2218,7 @@ public class SheetReaderService {
                 return text.Trim();
         }
         catch {
+            // ignored
         }
 
         try {
@@ -2198,6 +2228,7 @@ public class SheetReaderService {
                 return text.Trim();
         }
         catch {
+            // ignored
         }
 
         try {
@@ -2235,6 +2266,8 @@ public class SheetReaderService {
         dynamic? shapes = null;
         dynamic? cells = null;
         dynamic? originCell = null;
+
+        model.Images.Clear();
 
         try {
             shapes = worksheet.Shapes;
@@ -2275,6 +2308,7 @@ public class SheetReaderService {
                     });
                 }
                 catch {
+                    // ignored
                 }
                 finally {
                     ReleaseComObject(shape);
@@ -2282,6 +2316,7 @@ public class SheetReaderService {
             }
         }
         catch {
+            // ignored
         }
         finally {
             ReleaseComObject(originCell);
@@ -2298,6 +2333,7 @@ public class SheetReaderService {
                 return false;
         }
         catch {
+            // ignored
         }
 
         try {
@@ -2336,12 +2372,14 @@ public class SheetReaderService {
                     }
                 }
                 catch {
+                    // ignored
                 }
 
                 Thread.Sleep(ClipboardRetryDelayMilliseconds);
             }
         }
         catch {
+            // ignored
         }
 
         return null;

@@ -8,6 +8,9 @@ namespace CalculatorHost.Services;
 public static class CalculatorVersionService {
     public const int CurrentFormatVersion = 2;
 
+    private const string ApplicationDirectoryName = "CalculatorHost";
+    private const string VersionsDirectoryName = "Versions";
+
     private static readonly JsonSerializerOptions JsonOptions = new() {
         PropertyNameCaseInsensitive = true,
         WriteIndented = true,
@@ -41,18 +44,12 @@ public static class CalculatorVersionService {
     }
 
     public static string GetVersionsDirectory(string calculatorFilePath) {
-        var identity = CreateFileIdentity(calculatorFilePath);
         var calculatorName = Path.GetFileNameWithoutExtension(calculatorFilePath);
         var safeCalculatorName = MakeSafeFileName(calculatorName);
-        var shortHash = identity.Sha256.Length >= 16
-            ? identity.Sha256[..16]
-            : identity.Sha256;
 
         return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "CalculatorHost",
-            "Versions",
-            $"{safeCalculatorName}_{shortHash}");
+            GetVersionsRootDirectory(),
+            safeCalculatorName);
     }
 
     public static string CreateDefaultVersionFilePath(string calculatorFilePath) {
@@ -63,32 +60,39 @@ public static class CalculatorVersionService {
     }
 
     public static List<CalculatorVersionFileInfo> FindMatchingVersionFiles(string calculatorFilePath) {
-        var directory = GetVersionsDirectory(calculatorFilePath);
-
-        if (!Directory.Exists(directory))
-            return [];
-
         var currentIdentity = CreateFileIdentity(calculatorFilePath);
         var results = new List<CalculatorVersionFileInfo>();
+        var visitedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var filePath in Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly))
-            try {
-                var version = Load(filePath);
+        foreach (var directory in EnumerateCandidateVersionDirectories(calculatorFilePath)) {
+            if (!Directory.Exists(directory))
+                continue;
 
-                if (!BelongsToCalculator(version, currentIdentity))
+            foreach (var filePath in Directory.EnumerateFiles(directory, "*.json", SearchOption.TopDirectoryOnly)) {
+                if (!visitedFiles.Add(filePath))
                     continue;
 
-                results.Add(new CalculatorVersionFileInfo {
-                    FilePath = filePath,
-                    FileName = Path.GetFileName(filePath),
-                    CalculatorName = version.CalculatorName,
-                    SheetName = version.SheetName,
-                    CreatedAt = version.CreatedAt,
-                    ValuesCount = version.Values.Count
-                });
+                try {
+                    var version = Load(filePath);
+
+                    if (!BelongsToCalculator(version, currentIdentity))
+                        continue;
+
+                    results.Add(new CalculatorVersionFileInfo {
+                        FilePath = filePath,
+                        FileName = Path.GetFileName(filePath),
+                        CalculatorName = version.CalculatorName,
+                        SheetName = version.SheetName,
+                        CreatedAt = version.CreatedAt,
+                        ValuesCount = version.Values.Count,
+                        IsExactFileMatch = IsExactIdentityMatch(version.CalculatorFileIdentity, currentIdentity)
+                    });
+                }
+                catch {
+                    // Uszkodzony albo obcy JSON nie powinien blokować listy wersji.
+                }
             }
-            catch {
-            }
+        }
 
         return results
             .OrderByDescending(file => file.CreatedAt)
@@ -119,7 +123,7 @@ public static class CalculatorVersionService {
         string calculatorFilePath) {
         var savedIdentity = version.CalculatorFileIdentity;
 
-        if (savedIdentity == null || string.IsNullOrWhiteSpace(savedIdentity.Sha256))
+        if (savedIdentity == null)
             throw new InvalidOperationException(
                 "Ten plik wersji nie zawiera identyfikatora pliku kalkulatora. Zapisz wersję ponownie w aktualnej wersji programu.");
 
@@ -134,15 +138,69 @@ public static class CalculatorVersionService {
             $"a aktualnie otwarty jest '{currentIdentity.FileName}'.");
     }
 
+    private static string GetVersionsRootDirectory() {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ApplicationDirectoryName,
+            VersionsDirectoryName);
+    }
+
+    private static IEnumerable<string> EnumerateCandidateVersionDirectories(string calculatorFilePath) {
+        var versionsRootDirectory = GetVersionsRootDirectory();
+        var currentDirectory = GetVersionsDirectory(calculatorFilePath);
+
+        yield return currentDirectory;
+
+        if (!Directory.Exists(versionsRootDirectory))
+            yield break;
+
+        var calculatorName = Path.GetFileNameWithoutExtension(calculatorFilePath);
+        var safeCalculatorName = MakeSafeFileName(calculatorName);
+        var legacyDirectoryPrefix = safeCalculatorName + "_";
+
+        foreach (var directory in Directory.EnumerateDirectories(versionsRootDirectory, legacyDirectoryPrefix + "*",
+                     SearchOption.TopDirectoryOnly)) {
+            var directoryName = Path.GetFileName(directory);
+
+            if (directoryName.StartsWith(legacyDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
+                yield return directory;
+        }
+    }
+
     private static bool BelongsToCalculator(
         CalculatorVersionModel version,
         CalculatorVersionFileIdentityModel currentIdentity) {
         var savedIdentity = version.CalculatorFileIdentity;
 
-        if (savedIdentity == null || string.IsNullOrWhiteSpace(savedIdentity.Sha256))
+        if (savedIdentity == null)
             return false;
 
-        return string.Equals(savedIdentity.Sha256, currentIdentity.Sha256, StringComparison.OrdinalIgnoreCase);
+        if (IsExactIdentityMatch(savedIdentity, currentIdentity))
+            return true;
+
+        return IsOlderVersionOfSameCalculator(version, savedIdentity, currentIdentity);
+    }
+
+    private static bool IsExactIdentityMatch(
+        CalculatorVersionFileIdentityModel? savedIdentity,
+        CalculatorVersionFileIdentityModel currentIdentity) {
+        return savedIdentity != null &&
+               !string.IsNullOrWhiteSpace(savedIdentity.Sha256) &&
+               string.Equals(savedIdentity.Sha256, currentIdentity.Sha256, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsOlderVersionOfSameCalculator(
+        CalculatorVersionModel version,
+        CalculatorVersionFileIdentityModel savedIdentity,
+        CalculatorVersionFileIdentityModel currentIdentity) {
+        if (string.IsNullOrWhiteSpace(savedIdentity.FileName) ||
+            !string.Equals(savedIdentity.FileName, currentIdentity.FileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var currentCalculatorName = Path.GetFileNameWithoutExtension(currentIdentity.FileName);
+
+        return string.IsNullOrWhiteSpace(version.CalculatorName) ||
+               string.Equals(version.CalculatorName, currentCalculatorName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string MakeSafeFileName(string value) {
@@ -163,7 +221,13 @@ public class CalculatorVersionFileInfo {
     public string SheetName { get; init; } = string.Empty;
     public DateTime CreatedAt { get; init; }
     public int ValuesCount { get; init; }
+    public bool IsExactFileMatch { get; init; }
 
-    public string DisplayName =>
-        $"{Path.GetFileNameWithoutExtension(FileName)} · {CreatedAt:yyyy-MM-dd HH:mm} · {ValuesCount} pól";
+    public string DisplayName {
+        get {
+            var matchInfo = IsExactFileMatch ? string.Empty : " · nieaktualny";
+            return
+                $"{Path.GetFileNameWithoutExtension(FileName)} · {CreatedAt:yyyy-MM-dd HH:mm} · {ValuesCount} pól{matchInfo}";
+        }
+    }
 }

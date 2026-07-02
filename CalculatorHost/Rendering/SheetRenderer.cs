@@ -612,16 +612,6 @@ public class SheetRenderer {
         grid.Children.Add(line);
     }
 
-    private static Brush CreateSoftGridBrush(Color backgroundColor) {
-        var luminance = GetLuminance(backgroundColor);
-
-        var color = luminance > 170.0
-            ? Color.FromRgb(226, 232, 240)
-            : Color.FromArgb(72, 255, 255, 255);
-
-        return new SolidColorBrush(color);
-    }
-
     private static Brush CreateInputBackgroundBrush(Color backgroundColor) {
         var luminance = GetLuminance(backgroundColor);
 

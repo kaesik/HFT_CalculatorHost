@@ -27,28 +27,23 @@ public class SheetLayoutCacheService {
             if (!File.Exists(calculatorInfo.FilePath))
                 return false;
 
-            var cachePath = GetCachePath(calculatorInfo.FilePath);
+            var exactCachePath = GetCachePath(calculatorInfo.FilePath);
 
-            if (!File.Exists(cachePath))
-                return false;
+            if (TryLoadFromCacheFile(
+                    exactCachePath,
+                    calculatorInfo,
+                    true,
+                    out model))
+                return true;
 
-            var sourceFileInformation = new FileInfo(calculatorInfo.FilePath);
-            var json = File.ReadAllText(cachePath);
-            var document = JsonSerializer.Deserialize<SheetLayoutCacheDocument>(json, JsonOptions);
+            if (TryLoadFromCacheFile(
+                    exactCachePath,
+                    calculatorInfo,
+                    false,
+                    out model))
+                return true;
 
-            if (document == null ||
-                document.Version != CurrentCacheVersion ||
-                !string.Equals(
-                    document.SourceFilePath,
-                    Path.GetFullPath(calculatorInfo.FilePath),
-                    StringComparison.OrdinalIgnoreCase) ||
-                document.SourceFileLength != sourceFileInformation.Length ||
-                document.SourceLastWriteTimeUtcTicks != sourceFileInformation.LastWriteTimeUtc.Ticks ||
-                document.Sheet == null)
-                return false;
-
-            model = ConvertToSheetModel(document.Sheet);
-            return true;
+            return TryLoadCompatibleCache(calculatorInfo, exactCachePath, out model);
         }
         catch {
             model = null;
@@ -69,6 +64,8 @@ public class SheetLayoutCacheService {
             var document = new SheetLayoutCacheDocument {
                 Version = CurrentCacheVersion,
                 SourceFilePath = Path.GetFullPath(calculatorInfo.FilePath),
+                SourceFileName = GetCalculatorFileName(calculatorInfo),
+                CalculatorName = calculatorInfo.DisplayName,
                 SourceFileLength = sourceFileInformation.Length,
                 SourceLastWriteTimeUtcTicks = sourceFileInformation.LastWriteTimeUtc.Ticks,
                 Sheet = ConvertToCachedSheet(model)
@@ -84,17 +81,123 @@ public class SheetLayoutCacheService {
             return true;
         }
         catch {
-            if (!string.IsNullOrWhiteSpace(temporaryPath)) {
+            if (!string.IsNullOrWhiteSpace(temporaryPath))
                 try {
                     if (File.Exists(temporaryPath))
                         File.Delete(temporaryPath);
                 }
                 catch {
+                    // ignored
                 }
-            }
 
             return false;
         }
+    }
+
+    private bool TryLoadCompatibleCache(
+        CalculatorInfo calculatorInfo,
+        string exactCachePath,
+        out SheetModel? model) {
+        model = null;
+
+        if (!Directory.Exists(_cacheDirectory))
+            return false;
+
+        foreach (var cachePath in Directory
+                     .EnumerateFiles(_cacheDirectory, "*.json")
+                     .Where(path => !string.Equals(path, exactCachePath, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(File.GetLastWriteTimeUtc))
+            if (TryLoadFromCacheFile(
+                    cachePath,
+                    calculatorInfo,
+                    false,
+                    out model))
+                return true;
+
+        return false;
+    }
+
+    private static bool TryLoadFromCacheFile(
+        string cachePath,
+        CalculatorInfo calculatorInfo,
+        bool requireCurrentFileMetadata,
+        out SheetModel? model) {
+        model = null;
+
+        try {
+            if (!File.Exists(cachePath))
+                return false;
+
+            var json = File.ReadAllText(cachePath);
+            var document = JsonSerializer.Deserialize<SheetLayoutCacheDocument>(json, JsonOptions);
+
+            if (document == null ||
+                document.Version != CurrentCacheVersion ||
+                document.Sheet == null)
+                return false;
+
+            if (requireCurrentFileMetadata) {
+                if (!IsCurrentFileCache(document, calculatorInfo))
+                    return false;
+            }
+            else if (!IsCompatibleCalculatorCache(document, calculatorInfo)) return false;
+
+            model = ConvertToSheetModel(document.Sheet);
+            return true;
+        }
+        catch {
+            model = null;
+            return false;
+        }
+    }
+
+    private static bool IsCurrentFileCache(
+        SheetLayoutCacheDocument document,
+        CalculatorInfo calculatorInfo) {
+        if (!File.Exists(calculatorInfo.FilePath))
+            return false;
+
+        var sourceFileInformation = new FileInfo(calculatorInfo.FilePath);
+
+        return string.Equals(
+                   document.SourceFilePath,
+                   Path.GetFullPath(calculatorInfo.FilePath),
+                   StringComparison.OrdinalIgnoreCase) &&
+               document.SourceFileLength == sourceFileInformation.Length &&
+               document.SourceLastWriteTimeUtcTicks == sourceFileInformation.LastWriteTimeUtc.Ticks &&
+               document.Sheet != null;
+    }
+
+    private static bool IsCompatibleCalculatorCache(
+        SheetLayoutCacheDocument document,
+        CalculatorInfo calculatorInfo) {
+        if (document.Sheet == null)
+            return false;
+
+        var currentPath = Path.GetFullPath(calculatorInfo.FilePath);
+
+        if (string.Equals(document.SourceFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var currentFileName = GetCalculatorFileName(calculatorInfo);
+        var cachedFileName = !string.IsNullOrWhiteSpace(document.SourceFileName)
+            ? document.SourceFileName
+            : Path.GetFileName(document.SourceFilePath);
+
+        if (!string.IsNullOrWhiteSpace(currentFileName) &&
+            !string.IsNullOrWhiteSpace(cachedFileName) &&
+            string.Equals(currentFileName, cachedFileName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return !string.IsNullOrWhiteSpace(document.CalculatorName) &&
+               string.Equals(document.CalculatorName, calculatorInfo.DisplayName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetCalculatorFileName(CalculatorInfo calculatorInfo) {
+        if (!string.IsNullOrWhiteSpace(calculatorInfo.FileName))
+            return calculatorInfo.FileName;
+
+        return Path.GetFileName(calculatorInfo.FilePath);
     }
 
     private string GetCachePath(string sourceFilePath) {
@@ -206,6 +309,8 @@ public class SheetLayoutCacheService {
 public sealed class SheetLayoutCacheDocument {
     public int Version { get; init; }
     public string SourceFilePath { get; init; } = string.Empty;
+    public string SourceFileName { get; init; } = string.Empty;
+    public string CalculatorName { get; init; } = string.Empty;
     public long SourceFileLength { get; init; }
     public long SourceLastWriteTimeUtcTicks { get; init; }
     public CachedSheetModel? Sheet { get; init; }

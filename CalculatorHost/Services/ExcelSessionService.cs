@@ -95,8 +95,8 @@ public class ExcelSessionService : IDisposable {
         bool? previousEnableEvents = null;
 
         try {
-            previousEnableEvents = Convert.ToBoolean(_application.EnableEvents);
-            _application.EnableEvents = enableEvents;
+            previousEnableEvents = Convert.ToBoolean(_application?.EnableEvents);
+            if (_application != null) _application.EnableEvents = enableEvents;
         }
         catch {
             // ignored
@@ -108,7 +108,7 @@ public class ExcelSessionService : IDisposable {
         finally {
             if (previousEnableEvents.HasValue)
                 try {
-                    _application.EnableEvents = previousEnableEvents.Value;
+                    if (_application != null) _application.EnableEvents = previousEnableEvents.Value;
                 }
                 catch {
                     // ignored
@@ -182,38 +182,40 @@ public class ExcelSessionService : IDisposable {
         var wasSynchronized = false;
 
         try {
-            worksheets = _workbook.Worksheets;
-            var worksheetCount = Convert.ToInt32(worksheets.Count);
+            if (_workbook != null) worksheets = _workbook.Worksheets;
+            if (worksheets != null) {
+                var worksheetCount = Convert.ToInt32(worksheets.Count);
 
-            for (var worksheetIndex = 1; worksheetIndex <= worksheetCount; worksheetIndex++) {
-                dynamic? worksheet = null;
+                for (var worksheetIndex = 1; worksheetIndex <= worksheetCount; worksheetIndex++) {
+                    dynamic? worksheet = null;
 
-                try {
-                    worksheet = worksheets[worksheetIndex];
+                    try {
+                        worksheet = worksheets[worksheetIndex];
 
-                    if (TrySynchronizeFormControlDropdownsOnWorksheet(
-                            (object)worksheet,
-                            sourceCellModel,
-                            previousValue,
-                            previousIndex,
-                            selectedValue,
-                            selectedIndex))
-                        wasSynchronized = true;
+                        if (TrySynchronizeFormControlDropdownsOnWorksheet(
+                                (object)worksheet,
+                                sourceCellModel,
+                                previousValue,
+                                previousIndex,
+                                selectedValue,
+                                selectedIndex))
+                            wasSynchronized = true;
 
-                    if (TrySynchronizeActiveXDropdownsOnWorksheet(
-                            (object)worksheet,
-                            sourceCellModel,
-                            previousValue,
-                            previousIndex,
-                            selectedValue,
-                            selectedIndex))
-                        wasSynchronized = true;
-                }
-                catch {
-                    // ignored
-                }
-                finally {
-                    ReleaseComObject(worksheet);
+                        if (TrySynchronizeActiveXDropdownsOnWorksheet(
+                                (object)worksheet,
+                                sourceCellModel,
+                                previousValue,
+                                previousIndex,
+                                selectedValue,
+                                selectedIndex))
+                            wasSynchronized = true;
+                    }
+                    catch {
+                        // ignored
+                    }
+                    finally {
+                        ReleaseComObject(worksheet);
+                    }
                 }
             }
 
@@ -1283,9 +1285,8 @@ public class ExcelSessionService : IDisposable {
         }
     }
 
-    private static bool TryWriteControlInputTargetCell(object controlObject, CellModel cellModel, object? value) {
-        if (cellModel is not { InputTargetRow: not null, InputTargetColumn: not null })
-            return false;
+    private static void TryWriteControlInputTargetCell(object controlObject, CellModel cellModel, object? value) {
+        if (cellModel is not { InputTargetRow: not null, InputTargetColumn: not null }) return;
 
         dynamic? worksheet = null;
         dynamic? workbook = null;
@@ -1296,8 +1297,7 @@ public class ExcelSessionService : IDisposable {
         try {
             worksheet = GetControlWorksheet(controlObject);
 
-            if (worksheet == null)
-                return false;
+            if (worksheet == null) return;
 
             targetWorksheet = worksheet;
 
@@ -1309,11 +1309,9 @@ public class ExcelSessionService : IDisposable {
             cells = targetWorksheet.Cells;
             cell = cells[cellModel.InputTargetRow.Value, cellModel.InputTargetColumn.Value];
             cell.Value2 = value;
-
-            return true;
         }
         catch {
-            return false;
+            // ignored
         }
         finally {
             ReleaseComObject(cell);
@@ -1329,10 +1327,9 @@ public class ExcelSessionService : IDisposable {
 
     private static dynamic? GetControlWorksheet(object controlObject) {
         dynamic control = controlObject;
-        dynamic? parent = null;
 
         try {
-            parent = control.Parent;
+            var parent = control.Parent;
 
             try {
                 _ = parent.Cells;
@@ -1403,13 +1400,12 @@ public class ExcelSessionService : IDisposable {
             if (TrySplitSheetReference(normalizedReference, out var sheetName, out var cellAddress) &&
                 !string.IsNullOrWhiteSpace(sheetName) &&
                 !string.IsNullOrWhiteSpace(cellAddress)) {
-                worksheet = _workbook.Worksheets[sheetName];
-                range = worksheet.Range[cellAddress];
+                if (_workbook != null) worksheet = _workbook.Worksheets[sheetName];
+                if (worksheet != null) range = worksheet.Range[cellAddress];
             }
-            else
-                range = _application.Range[normalizedReference];
+            else if (_application != null) range = _application.Range[normalizedReference];
 
-            range.Value2 = value;
+            if (range != null) range.Value2 = value;
             return true;
         }
         catch {
@@ -1519,13 +1515,16 @@ public class ExcelSessionService : IDisposable {
 
         var macroToRun = macroName.Trim();
 
-        if (!macroToRun.Contains('!')) {
-            var workbookName = Convert.ToString(_workbook.Name) ?? string.Empty;
-            macroToRun = $"'{workbookName.Replace("'", "''")}'!{macroToRun}";
-        }
+        if (!macroToRun.Contains('!'))
+            if (_workbook != null) {
+                var workbookName = Convert.ToString(_workbook.Name) ?? string.Empty;
+                macroToRun = $"'{workbookName.Replace("'", "''")}'!{macroToRun}";
+            }
 
-        _application.Run(macroToRun);
-        _application.Calculate();
+        if (_application != null) {
+            _application.Run(macroToRun);
+            _application.Calculate();
+        }
     }
 
     public void RunMacroButton(MacroButtonConfig config) {
@@ -1545,7 +1544,7 @@ public class ExcelSessionService : IDisposable {
         if (_application == null || _workbook == null)
             throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
 
-        _application.Calculate();
+        if (_application != null) _application.Calculate();
     }
 
     public void CloseWorkbook() {
@@ -1652,7 +1651,7 @@ public class ExcelSessionService : IDisposable {
 
                 if (!string.IsNullOrWhiteSpace(codeName)) {
                     var clickMacroName = $"{codeName}.{oleObjectName}_Click";
-                    _application.Run(clickMacroName);
+                    if (_application != null) _application.Run(clickMacroName);
                     return;
                 }
             }

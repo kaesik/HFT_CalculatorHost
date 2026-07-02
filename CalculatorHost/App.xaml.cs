@@ -21,7 +21,7 @@ public partial class App {
     }
 
     protected override void OnExit(ExitEventArgs e) {
-        ExcelWorker?.Dispose();
+        ExcelWorker.Dispose();
         base.OnExit(e);
     }
 }

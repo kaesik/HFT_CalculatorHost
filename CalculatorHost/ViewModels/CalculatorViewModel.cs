@@ -335,12 +335,23 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             var version = CalculatorVersionService.Load(versionFilePath);
             ValidateVersion(version);
 
+            var currentInputCells = SheetModel.Cells
+                .Where(cell => cell.IsInput && !cell.IsMergedSlave)
+                .ToDictionary(cell => (cell.Row, cell.Column), cell => cell);
+
             var values = version.Values
                 .Where(value => value.Row > 0 && value.Column > 0)
+                .Where(value => currentInputCells.ContainsKey((value.Row, value.Column)))
                 .Select(value => new KeyValuePair<(int Row, int Column), string>(
                     (value.Row, value.Column),
                     value.Value))
                 .ToList();
+
+            var skippedValuesCount = version.Values.Count - values.Count;
+
+            if (values.Count == 0)
+                throw new InvalidOperationException(
+                    "Plik wersji nie zawiera pól, które istnieją jako edytowalne pola w aktualnym arkuszu.");
 
             var applyingStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => {
@@ -366,7 +377,10 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
                 $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
             SheetModel = model;
-            StatusMessage = $"Wczytano wersję: {Path.GetFileName(versionFilePath)}";
+
+            StatusMessage = skippedValuesCount > 0
+                ? $"Wczytano wersję: {Path.GetFileName(versionFilePath)} (zastosowano {values.Count} z {version.Values.Count} pól)"
+                : $"Wczytano wersję: {Path.GetFileName(versionFilePath)}";
         }
         catch (Exception exception) {
             if (!_disposed)
