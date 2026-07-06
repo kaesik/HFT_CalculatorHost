@@ -10,6 +10,38 @@ using CalculatorHost.Services;
 
 namespace CalculatorHost.ViewModels;
 
+public static class CalculatorStartupVersionSelection {
+    private static readonly object SyncRoot = new();
+    private static readonly Dictionary<string, string> SelectedVersionPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    public static void Set(string calculatorFilePath, string versionFilePath) {
+        if (string.IsNullOrWhiteSpace(calculatorFilePath) || string.IsNullOrWhiteSpace(versionFilePath)) return;
+
+        lock (SyncRoot) {
+            SelectedVersionPaths[calculatorFilePath] = versionFilePath;
+        }
+    }
+
+    public static void Clear(string calculatorFilePath) {
+        if (string.IsNullOrWhiteSpace(calculatorFilePath)) return;
+
+        lock (SyncRoot) {
+            SelectedVersionPaths.Remove(calculatorFilePath);
+        }
+    }
+
+    public static string? Take(string calculatorFilePath) {
+        if (string.IsNullOrWhiteSpace(calculatorFilePath)) return null;
+
+        lock (SyncRoot) {
+            if (!SelectedVersionPaths.Remove(calculatorFilePath, out var versionFilePath))
+                return null;
+
+            return versionFilePath;
+        }
+    }
+}
+
 public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private readonly Dictionary<(int Row, int Column), string> _committedCellValues = [];
     private readonly ExcelSessionService _excelSession;
@@ -237,7 +269,16 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)}");
             SheetModel = model;
             MacroButtons = new ObservableCollection<MacroButtonConfig>(buttons);
-            StatusMessage = string.Empty;
+
+            var startupVersionPath = CalculatorStartupVersionSelection.Take(calculatorInfo.FilePath);
+
+            if (!string.IsNullOrWhiteSpace(startupVersionPath)) {
+                operationName = "wczytywania wybranej wersji";
+                StatusMessage = "Wczytywanie wybranej wersji…";
+                StatusMessage = await ApplyVersionFileAsync(startupVersionPath);
+            }
+            else
+                StatusMessage = string.Empty;
         }
         catch (Exception exception) {
             if (!_disposed) {
@@ -326,61 +367,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ClearPerformanceMessage();
 
         try {
-            if (SheetModel == null)
-                throw new InvalidOperationException("Nie ma wczytanego arkusza, więc nie można wczytać wersji.");
-
-            if (_calculatorInfo == null)
-                throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
-
-            var version = CalculatorVersionService.Load(versionFilePath);
-            ValidateVersion(version);
-
-            var currentInputCells = SheetModel.Cells
-                .Where(cell => cell.IsInput && !cell.IsMergedSlave)
-                .ToDictionary(cell => (cell.Row, cell.Column), cell => cell);
-
-            var values = version.Values
-                .Where(value => value.Row > 0 && value.Column > 0)
-                .Where(value => currentInputCells.ContainsKey((value.Row, value.Column)))
-                .Select(value => new KeyValuePair<(int Row, int Column), string>(
-                    (value.Row, value.Column),
-                    value.Value))
-                .ToList();
-
-            var skippedValuesCount = version.Values.Count - values.Count;
-
-            if (values.Count == 0)
-                throw new InvalidOperationException(
-                    "Plik wersji nie zawiera pól, które istnieją jako edytowalne pola w aktualnym arkuszu.");
-
-            var applyingStopwatch = Stopwatch.StartNew();
-            await _worker.InvokeAsync(() => {
-                WritePendingValues(values);
-                _excelSession.Recalculate();
-            });
-            applyingStopwatch.Stop();
-
-            var currentModel = SheetModel;
-
-            if (currentModel == null)
-                return;
-
-            var refreshStopwatch = Stopwatch.StartNew();
-            var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
-            refreshStopwatch.Stop();
-
-            if (_disposed) return;
-
-            UpdateCommittedCellValues(model);
-            ClearPendingChanges();
-            SetOperationPerformanceMessage(
-                $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
-                $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
-            SheetModel = model;
-
-            StatusMessage = skippedValuesCount > 0
-                ? $"Wczytano wersję: {Path.GetFileName(versionFilePath)} (zastosowano {values.Count} z {version.Values.Count} pól)"
-                : $"Wczytano wersję: {Path.GetFileName(versionFilePath)}";
+            StatusMessage = await ApplyVersionFileAsync(versionFilePath);
         }
         catch (Exception exception) {
             if (!_disposed)
@@ -390,6 +377,65 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             if (!_disposed)
                 IsLoading = false;
         }
+    }
+
+    private async Task<string> ApplyVersionFileAsync(string versionFilePath) {
+        if (SheetModel == null)
+            throw new InvalidOperationException("Nie ma wczytanego arkusza, więc nie można wczytać wersji.");
+
+        if (_calculatorInfo == null)
+            throw new InvalidOperationException("Brak informacji o pliku kalkulatora.");
+
+        var version = CalculatorVersionService.Load(versionFilePath);
+        ValidateVersion(version);
+
+        var currentInputCells = SheetModel.Cells
+            .Where(cell => cell is { IsInput: true, IsMergedSlave: false })
+            .ToDictionary(cell => (cell.Row, cell.Column), cell => cell);
+
+        var values = version.Values
+            .Where(value => value.Row > 0 && value.Column > 0)
+            .Where(value => currentInputCells.ContainsKey((value.Row, value.Column)))
+            .Select(value => new KeyValuePair<(int Row, int Column), string>(
+                (value.Row, value.Column),
+                value.Value))
+            .ToList();
+
+        var skippedValuesCount = version.Values.Count - values.Count;
+
+        if (values.Count == 0)
+            throw new InvalidOperationException(
+                "Plik wersji nie zawiera pól, które istnieją jako edytowalne pola w aktualnym arkuszu.");
+
+        var applyingStopwatch = Stopwatch.StartNew();
+        await _worker.InvokeAsync(() => {
+            WritePendingValues(values);
+            _excelSession.Recalculate();
+        });
+        applyingStopwatch.Stop();
+
+        var currentModel = SheetModel;
+
+        if (currentModel == null)
+            return string.Empty;
+
+        var refreshStopwatch = Stopwatch.StartNew();
+        var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+        refreshStopwatch.Stop();
+
+        if (_disposed)
+            return string.Empty;
+
+        UpdateCommittedCellValues(model);
+        ClearPendingChanges();
+        SetOperationPerformanceMessage(
+            $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
+            $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
+        SheetModel = model;
+
+        return skippedValuesCount > 0
+            ? $"Wczytano wersję: {Path.GetFileName(versionFilePath)} (zastosowano {values.Count} z {version.Values.Count} pól)"
+            : $"Wczytano wersję: {Path.GetFileName(versionFilePath)}";
     }
 
     public void ShowExternalError(string prefix, Exception exception) {

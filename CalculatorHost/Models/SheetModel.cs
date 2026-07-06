@@ -13,7 +13,4 @@ public class SheetModel {
     public int MaxColumn { get; init; }
     public double DefaultColumnWidth { get; set; } = 64.0;
     public double DefaultRowHeight { get; set; } = 20.0;
-
-    public double TotalWidth => ColumnWidths.Values.Sum();
-    public double TotalHeight => RowHeights.Values.Sum();
 }

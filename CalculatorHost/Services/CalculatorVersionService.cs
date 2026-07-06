@@ -37,10 +37,9 @@ public static class CalculatorVersionService {
         if (version == null)
             throw new InvalidOperationException("Plik wersji jest pusty albo ma niepoprawny format.");
 
-        if (version.FormatVersion < 1 || version.FormatVersion > CurrentFormatVersion)
-            throw new InvalidOperationException($"Nieobsługiwana wersja formatu pliku: {version.FormatVersion}.");
-
-        return version;
+        return version.FormatVersion is < 1 or > CurrentFormatVersion
+            ? throw new InvalidOperationException($"Nieobsługiwana wersja formatu pliku: {version.FormatVersion}.")
+            : version;
     }
 
     public static string GetVersionsDirectory(string calculatorFilePath) {
