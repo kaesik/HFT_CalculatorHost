@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CalculatorHost")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2c2fdc0bb289271164e5a69e09b3f1e73d8c095c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7af91ea6d4edd295448d3d5b4df609fb45eaa61f")]
 [assembly: System.Reflection.AssemblyProductAttribute("CalculatorHost")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CalculatorHost")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

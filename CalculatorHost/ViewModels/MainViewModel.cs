@@ -93,7 +93,7 @@ public class MainViewModel : INotifyPropertyChanged {
             Calculators = new ObservableCollection<CalculatorInfo>(found);
 
             if (found.Count == 0)
-                ErrorMessage = $"Folder '{FolderPath}' jest pusty — brak plików .xlsm.";
+                ErrorMessage = $"Folder '{FolderPath}' jest pusty - brak plików .xlsm.";
         }
         catch (Exception exception) {
             IsFolderMissing = false;

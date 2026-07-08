@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using CalculatorHost.Models;
@@ -16,6 +17,7 @@ public sealed class RenderedSheet {
     internal Dictionary<(int Row, int Column), TextBlock> ReadOnlyControls { get; } = [];
     internal Dictionary<(int Row, int Column), TextBox> TextBoxControls { get; } = [];
     internal Dictionary<(int Row, int Column), ComboBox> ComboBoxControls { get; } = [];
+    internal Border? SelectedCellHighlight { get; set; }
     internal bool IsUpdatingValues { get; set; }
 
     public Canvas Canvas { get; }
@@ -23,13 +25,18 @@ public sealed class RenderedSheet {
 
 public class SheetRenderer {
     private const double MinimumCellSize = 2.0;
-    private const double SoftGridLineThickness = 0.5;
-    private const double VisibleBorderMinimumThickness = 1.0;
+    private const double VisibleBorderThickness = 0.75;
+    private const int BorderOverlayZIndex = 900;
+    private const int SelectedCellHighlightZIndex = 2500;
+    private static readonly Color UniformBorderColor = Color.FromRgb(178, 178, 178);
+    private static readonly Color SelectedCellBorderColor = Color.FromRgb(37, 99, 235);
+    private static Style? _flatComboBoxStyle;
 
     public static RenderedSheet RenderSheet(
         SheetModel sheet,
         Action<int, int, string> onInputChanged,
-        Action<MacroButtonConfig>? onMacroButtonClicked = null) {
+        Action<MacroButtonConfig>? onMacroButtonClicked = null,
+        Action<CellModel>? onCellSelected = null) {
         var columnPositions = CalculatePositions(
             sheet.FirstColumn,
             sheet.MaxColumn,
@@ -104,14 +111,22 @@ public class SheetRenderer {
                 cell,
                 cellWidth,
                 cellHeight,
-                onInputChanged);
+                onInputChanged,
+                onCellSelected,
+                () => UpdateSelectedCellHighlight(
+                    renderedSheet,
+                    canvas,
+                    cellX,
+                    cellY,
+                    cellWidth,
+                    cellHeight));
 
             Canvas.SetLeft(element, cellX);
             Canvas.SetTop(element, cellY);
             canvas.Children.Add(element);
         }
 
-        DrawExcelBorderOverlay(
+        DrawUniformCellGridOverlay(
             canvas,
             sheet,
             columnPositions,
@@ -220,7 +235,9 @@ public class SheetRenderer {
         CellModel cell,
         double width,
         double height,
-        Action<int, int, string> onInputChanged) {
+        Action<int, int, string> onInputChanged,
+        Action<CellModel>? onCellSelected,
+        Action showSelectedCellHighlight) {
         var content = cell.IsInput
             ? CreateInputControl(renderedSheet, cell, width, height, onInputChanged)
             : CreateReadOnlyControl(renderedSheet, cell);
@@ -244,9 +261,41 @@ public class SheetRenderer {
         };
 
         grid.Children.Add(baseBorder);
-        AddExcelBorderLines(grid, cell);
+
+        RegisterCellSelectionHandlers(
+            grid,
+            content,
+            cell,
+            onCellSelected,
+            showSelectedCellHighlight);
 
         return grid;
+    }
+
+    private static void RegisterCellSelectionHandlers(
+        FrameworkElement cellElement,
+        FrameworkElement contentElement,
+        CellModel cell,
+        Action<CellModel>? onCellSelected,
+        Action showSelectedCellHighlight) {
+        if (onCellSelected == null)
+            return;
+
+        void SelectCell() {
+            showSelectedCellHighlight();
+            onCellSelected(cell);
+        }
+
+        MouseButtonEventHandler mouseHandler = (_, _) => SelectCell();
+        KeyboardFocusChangedEventHandler focusHandler = (_, _) => SelectCell();
+
+        cellElement.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, mouseHandler, true);
+        cellElement.AddHandler(UIElement.MouseLeftButtonDownEvent, mouseHandler, true);
+        cellElement.AddHandler(UIElement.GotKeyboardFocusEvent, focusHandler, true);
+
+        contentElement.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent, mouseHandler, true);
+        contentElement.AddHandler(UIElement.MouseLeftButtonDownEvent, mouseHandler, true);
+        contentElement.AddHandler(UIElement.GotKeyboardFocusEvent, focusHandler, true);
     }
 
     private static Button CreateMacroButtonElement(
@@ -319,7 +368,7 @@ public class SheetRenderer {
         CellModel cell) {
         var textBlock = new TextBlock {
             Text = cell.DisplayText,
-            FontSize = Math.Max(cell.FontSize, 7.0),
+            FontSize = NormalizeFontSize(cell.FontSize),
             FontWeight = cell.IsBold ? FontWeights.Bold : FontWeights.Normal,
             FontStyle = cell.IsItalic ? FontStyles.Italic : FontStyles.Normal,
             Foreground = new SolidColorBrush(cell.ForegroundColor),
@@ -349,14 +398,12 @@ public class SheetRenderer {
             ? CreateComboBoxInput(renderedSheet, cell, onInputChanged)
             : CreateTextBoxInput(renderedSheet, cell, onInputChanged);
 
-        var isSmallCell = width < 26.0 || height < 18.0;
-
         return new Border {
-            Margin = isSmallCell ? new Thickness(0) : new Thickness(1.5),
-            Background = CreateInputBackgroundBrush(cell.BackgroundColor),
-            BorderBrush = new SolidColorBrush(GetInputBorderColor(cell.InputType)),
-            BorderThickness = isSmallCell ? new Thickness(0) : new Thickness(1),
-            CornerRadius = isSmallCell ? new CornerRadius(0) : new CornerRadius(3),
+            Margin = new Thickness(0),
+            Background = new SolidColorBrush(cell.BackgroundColor),
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true,
             Child = control
@@ -369,7 +416,7 @@ public class SheetRenderer {
         Action<int, int, string> onInputChanged) {
         var textBox = new TextBox {
             Text = cell.DisplayText,
-            FontSize = Math.Max(cell.FontSize, 7.0),
+            FontSize = NormalizeFontSize(cell.FontSize),
             FontWeight = cell.IsBold ? FontWeights.Bold : FontWeights.Normal,
             FontStyle = cell.IsItalic ? FontStyles.Italic : FontStyles.Normal,
             Foreground = new SolidColorBrush(cell.ForegroundColor),
@@ -420,7 +467,7 @@ public class SheetRenderer {
         Action<int, int, string> onInputChanged) {
         var comboBox = new ComboBox {
             ItemsSource = cell.DropdownValues,
-            FontSize = Math.Max(cell.FontSize, 7.0),
+            FontSize = NormalizeFontSize(cell.FontSize),
             FontWeight = cell.IsBold ? FontWeights.Bold : FontWeights.Normal,
             Foreground = new SolidColorBrush(cell.ForegroundColor),
             VerticalAlignment = VerticalAlignment.Stretch,
@@ -430,7 +477,8 @@ public class SheetRenderer {
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
             IsEditable = false,
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            Style = GetFlatComboBoxStyle()
         };
 
         TextOptions.SetTextFormattingMode(comboBox, TextFormattingMode.Display);
@@ -457,65 +505,251 @@ public class SheetRenderer {
     }
 
 
-    private static void DrawExcelBorderOverlay(
+    private static void UpdateSelectedCellHighlight(
+        RenderedSheet renderedSheet,
+        Canvas canvas,
+        double left,
+        double top,
+        double width,
+        double height) {
+        var highlight = renderedSheet.SelectedCellHighlight;
+
+        if (highlight == null) {
+            highlight = new Border {
+                BorderBrush = new SolidColorBrush(SelectedCellBorderColor),
+                BorderThickness = new Thickness(2),
+                Background = Brushes.Transparent,
+                IsHitTestVisible = false,
+                SnapsToDevicePixels = true,
+                UseLayoutRounding = true
+            };
+
+            renderedSheet.SelectedCellHighlight = highlight;
+            Panel.SetZIndex(highlight, SelectedCellHighlightZIndex);
+            canvas.Children.Add(highlight);
+        }
+
+        Canvas.SetLeft(highlight, RoundLayoutPosition(left));
+        Canvas.SetTop(highlight, RoundLayoutPosition(top));
+        highlight.Width = Math.Max(width, MinimumCellSize);
+        highlight.Height = Math.Max(height, MinimumCellSize);
+    }
+
+    private static void DrawUniformCellGridOverlay(
         Canvas canvas,
         SheetModel sheet,
         Dictionary<int, double> columnPositions,
         Dictionary<int, double> rowPositions) {
-        foreach (var cell in sheet.Cells) {
-            if (!columnPositions.TryGetValue(cell.Column, out var cellX)) continue;
-            if (!rowPositions.TryGetValue(cell.Row, out var cellY)) continue;
+        var gridLines = CollectUniformCellGridLines(sheet);
 
-            var cellWidth = CalculateSpanSize(
-                cell.Column,
-                cell.ColSpan,
-                sheet.ColumnWidths,
-                sheet.DefaultColumnWidth);
+        foreach (var line in gridLines.Values)
+            if (line.IsHorizontal)
+                DrawHorizontalBorderLine(canvas, line, columnPositions, rowPositions);
+            else
+                DrawVerticalBorderLine(canvas, line, columnPositions, rowPositions);
+    }
 
-            var cellHeight = CalculateSpanSize(
+    private static Dictionary<BorderLineKey, BorderLine> CollectUniformCellGridLines(SheetModel sheet) {
+        var gridLines = new Dictionary<BorderLineKey, BorderLine>();
+
+        foreach (var cell in sheet.Cells.Where(cell => !cell.IsMergedSlave)) {
+            RegisterUniformGridLine(
+                gridLines,
+                true,
                 cell.Row,
-                cell.RowSpan,
-                sheet.RowHeights,
-                sheet.DefaultRowHeight);
+                cell.Column,
+                cell.Column + cell.ColSpan);
 
-            if (cellWidth < MinimumCellSize || cellHeight < MinimumCellSize) continue;
+            RegisterUniformGridLine(
+                gridLines,
+                true,
+                cell.Row + cell.RowSpan,
+                cell.Column,
+                cell.Column + cell.ColSpan);
 
-            AddCanvasBorderLine(
-                canvas,
-                cellX,
-                cellY,
-                cellWidth,
-                Math.Max(cell.BorderTopThickness, 0.0),
-                cell.BorderColor,
-                900);
+            RegisterUniformGridLine(
+                gridLines,
+                false,
+                cell.Column,
+                cell.Row,
+                cell.Row + cell.RowSpan);
 
-            AddCanvasBorderLine(
-                canvas,
-                cellX,
-                cellY + cellHeight - Math.Max(cell.BorderBottomThickness, 0.0),
-                cellWidth,
-                Math.Max(cell.BorderBottomThickness, 0.0),
-                cell.BorderColor,
-                900);
-
-            AddCanvasBorderLine(
-                canvas,
-                cellX,
-                cellY,
-                Math.Max(cell.BorderLeftThickness, 0.0),
-                cellHeight,
-                cell.BorderColor,
-                900);
-
-            AddCanvasBorderLine(
-                canvas,
-                cellX + cellWidth - Math.Max(cell.BorderRightThickness, 0.0),
-                cellY,
-                Math.Max(cell.BorderRightThickness, 0.0),
-                cellHeight,
-                cell.BorderColor,
-                900);
+            RegisterUniformGridLine(
+                gridLines,
+                false,
+                cell.Column + cell.ColSpan,
+                cell.Row,
+                cell.Row + cell.RowSpan);
         }
+
+        return gridLines;
+    }
+
+    private static void RegisterUniformGridLine(
+        Dictionary<BorderLineKey, BorderLine> gridLines,
+        bool isHorizontal,
+        int boundaryIndex,
+        int startIndex,
+        int endIndex) {
+        if (endIndex <= startIndex)
+            return;
+
+        for (var index = startIndex; index < endIndex; index++) {
+            var key = new BorderLineKey(isHorizontal, boundaryIndex, index, index + 1);
+
+            if (gridLines.ContainsKey(key))
+                continue;
+
+            gridLines[key] = new BorderLine {
+                IsHorizontal = isHorizontal,
+                BoundaryIndex = boundaryIndex,
+                StartIndex = index,
+                EndIndex = index + 1,
+                Thickness = VisibleBorderThickness,
+                Color = UniformBorderColor
+            };
+        }
+    }
+
+    private static void DrawHorizontalBorderLine(
+        Canvas canvas,
+        BorderLine line,
+        Dictionary<int, double> columnPositions,
+        Dictionary<int, double> rowPositions) {
+        if (!rowPositions.TryGetValue(line.BoundaryIndex, out var y)) return;
+        if (!columnPositions.TryGetValue(line.StartIndex, out var startX)) return;
+        if (!columnPositions.TryGetValue(line.EndIndex, out var endX)) return;
+
+        startX = RoundLayoutPosition(startX);
+        endX = RoundLayoutPosition(endX);
+        y = RoundLayoutPosition(y);
+
+        var width = endX - startX;
+
+        if (width <= 0.0)
+            return;
+
+        AddCanvasBorderLine(
+            canvas,
+            startX,
+            GetBorderLineStart(y, VisibleBorderThickness, canvas.Height),
+            width,
+            VisibleBorderThickness,
+            line.Color);
+    }
+
+    private static void DrawVerticalBorderLine(
+        Canvas canvas,
+        BorderLine line,
+        Dictionary<int, double> columnPositions,
+        Dictionary<int, double> rowPositions) {
+        if (!columnPositions.TryGetValue(line.BoundaryIndex, out var x)) return;
+        if (!rowPositions.TryGetValue(line.StartIndex, out var startY)) return;
+        if (!rowPositions.TryGetValue(line.EndIndex, out var endY)) return;
+
+        startY = RoundLayoutPosition(startY);
+        endY = RoundLayoutPosition(endY);
+        x = RoundLayoutPosition(x);
+
+        var height = endY - startY;
+
+        if (height <= 0.0)
+            return;
+
+        AddCanvasBorderLine(
+            canvas,
+            GetBorderLineStart(x, VisibleBorderThickness, canvas.Width),
+            startY,
+            VisibleBorderThickness,
+            height,
+            line.Color);
+    }
+
+    private static double GetBorderLineStart(double position, double thickness, double maximumPosition) {
+        if (position <= 0.0)
+            return 0.0;
+
+        if (position >= maximumPosition)
+            return Math.Max(0.0, maximumPosition - thickness);
+
+        return position;
+    }
+
+    private static double RoundLayoutPosition(double value) {
+        return Math.Round(value, MidpointRounding.AwayFromZero);
+    }
+
+    private static double NormalizeFontSize(double fontSize) {
+        if (double.IsNaN(fontSize) || fontSize <= 0.0)
+            return 11.0;
+
+        return Math.Max(9.0, Math.Min(12.0, fontSize));
+    }
+
+    private static Style GetFlatComboBoxStyle() {
+        if (_flatComboBoxStyle != null)
+            return _flatComboBoxStyle;
+
+        const string styleXaml = @"
+<Style xmlns=""http://schemas.microsoft.com/winfx/2006/xaml/presentation""
+       xmlns:x=""http://schemas.microsoft.com/winfx/2006/xaml""
+       TargetType=""{x:Type ComboBox}"">
+    <Setter Property=""OverridesDefaultStyle"" Value=""True"" />
+    <Setter Property=""SnapsToDevicePixels"" Value=""True"" />
+    <Setter Property=""Template"">
+        <Setter.Value>
+            <ControlTemplate TargetType=""{x:Type ComboBox}"">
+                <Grid Background=""Transparent"" SnapsToDevicePixels=""True"">
+                    <ToggleButton
+                        Background=""Transparent""
+                        BorderBrush=""Transparent""
+                        BorderThickness=""0""
+                        ClickMode=""Press""
+                        Focusable=""False""
+                        IsChecked=""{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"">
+                        <Grid Background=""Transparent"">
+                            <ContentPresenter
+                                Margin=""4,0,18,0""
+                                HorizontalAlignment=""{TemplateBinding HorizontalContentAlignment}""
+                                VerticalAlignment=""Center""
+                                Content=""{TemplateBinding SelectionBoxItem}""
+                                ContentStringFormat=""{TemplateBinding SelectionBoxItemStringFormat}""
+                                ContentTemplate=""{TemplateBinding SelectionBoxItemTemplate}"" />
+                            <TextBlock
+                                Margin=""0,0,5,0""
+                                HorizontalAlignment=""Right""
+                                VerticalAlignment=""Center""
+                                FontSize=""9""
+                                Foreground=""#666666""
+                                IsHitTestVisible=""False""
+                                Text=""▾"" />
+                        </Grid>
+                    </ToggleButton>
+                    <Popup
+                        x:Name=""PART_Popup""
+                        AllowsTransparency=""True""
+                        Focusable=""False""
+                        IsOpen=""{TemplateBinding IsDropDownOpen}""
+                        Placement=""Bottom""
+                        PopupAnimation=""Slide"">
+                        <Border
+                            MinWidth=""{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}""
+                            Background=""White""
+                            BorderBrush=""#B2B2B2""
+                            BorderThickness=""1"">
+                            <ScrollViewer MaxHeight=""260"" SnapsToDevicePixels=""True"">
+                                <ItemsPresenter />
+                            </ScrollViewer>
+                        </Border>
+                    </Popup>
+                </Grid>
+            </ControlTemplate>
+        </Setter.Value>
+    </Setter>
+</Style>";
+
+        _flatComboBoxStyle = (Style)XamlReader.Parse(styleXaml);
+        return _flatComboBoxStyle;
     }
 
     private static void AddCanvasBorderLine(
@@ -524,14 +758,13 @@ public class SheetRenderer {
         double top,
         double width,
         double height,
-        Color color,
-        int zIndex) {
+        Color color) {
         if (width <= 0.0 || height <= 0.0)
             return;
 
         var line = new Border {
-            Width = Math.Max(width, VisibleBorderMinimumThickness),
-            Height = Math.Max(height, VisibleBorderMinimumThickness),
+            Width = width,
+            Height = height,
             Background = new SolidColorBrush(color),
             IsHitTestVisible = false,
             SnapsToDevicePixels = true,
@@ -540,76 +773,8 @@ public class SheetRenderer {
 
         Canvas.SetLeft(line, left);
         Canvas.SetTop(line, top);
-        Panel.SetZIndex(line, zIndex);
+        Panel.SetZIndex(line, BorderOverlayZIndex);
         canvas.Children.Add(line);
-    }
-
-    private static void AddExcelBorderLines(Grid grid, CellModel cell) {
-        AddBorderLine(
-            grid,
-            cell.BorderTopThickness,
-            cell.BorderColor,
-            VerticalAlignment.Top,
-            HorizontalAlignment.Stretch,
-            null,
-            cell.BorderTopThickness);
-
-        AddBorderLine(
-            grid,
-            cell.BorderBottomThickness,
-            cell.BorderColor,
-            VerticalAlignment.Bottom,
-            HorizontalAlignment.Stretch,
-            null,
-            cell.BorderBottomThickness);
-
-        AddBorderLine(
-            grid,
-            cell.BorderLeftThickness,
-            cell.BorderColor,
-            VerticalAlignment.Stretch,
-            HorizontalAlignment.Left,
-            cell.BorderLeftThickness,
-            null);
-
-        AddBorderLine(
-            grid,
-            cell.BorderRightThickness,
-            cell.BorderColor,
-            VerticalAlignment.Stretch,
-            HorizontalAlignment.Right,
-            cell.BorderRightThickness,
-            null);
-    }
-
-    private static void AddBorderLine(
-        Grid grid,
-        double thickness,
-        Color color,
-        VerticalAlignment verticalAlignment,
-        HorizontalAlignment horizontalAlignment,
-        double? width,
-        double? height) {
-        if (thickness <= 0.0)
-            return;
-
-        var line = new Border {
-            Background = new SolidColorBrush(color),
-            VerticalAlignment = verticalAlignment,
-            HorizontalAlignment = horizontalAlignment,
-            IsHitTestVisible = false,
-            SnapsToDevicePixels = true,
-            UseLayoutRounding = true
-        };
-
-        if (width.HasValue)
-            line.Width = Math.Max(width.Value, SoftGridLineThickness);
-
-        if (height.HasValue)
-            line.Height = Math.Max(height.Value, SoftGridLineThickness);
-
-        Panel.SetZIndex(line, 20);
-        grid.Children.Add(line);
     }
 
     private static Brush CreateInputBackgroundBrush(Color backgroundColor) {
@@ -639,5 +804,20 @@ public class SheetRenderer {
             TextAlignment.Justify => HorizontalAlignment.Stretch,
             _ => HorizontalAlignment.Left
         };
+    }
+
+    private readonly record struct BorderLineKey(
+        bool IsHorizontal,
+        int BoundaryIndex,
+        int StartIndex,
+        int EndIndex);
+
+    private sealed class BorderLine {
+        public bool IsHorizontal { get; init; }
+        public int BoundaryIndex { get; init; }
+        public int StartIndex { get; init; }
+        public int EndIndex { get; init; }
+        public double Thickness { get; set; }
+        public Color Color { get; set; }
     }
 }

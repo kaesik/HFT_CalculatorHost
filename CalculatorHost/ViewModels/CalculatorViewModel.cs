@@ -309,7 +309,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
         HasPendingChanges = _pendingCellValues.Count > 0;
         StatusMessage = HasPendingChanges
-            ? "Wprowadzono zmiany — kliknij „Przelicz”."
+            ? "Wprowadzono zmiany - kliknij „Przelicz”."
             : string.Empty;
     }
 

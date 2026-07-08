@@ -50,7 +50,7 @@ public partial class MainWindow {
 
             var calculatorView = new CalculatorView(_activeCalculatorViewModel);
             MainContent.Content = calculatorView;
-            TitleCalculatorName.Text = $"— {calculatorInfo.DisplayName}";
+            TitleCalculatorName.Text = $"- {calculatorInfo.DisplayName}";
 
             await _activeCalculatorViewModel.LoadCalculatorAsync(calculatorInfo);
         }

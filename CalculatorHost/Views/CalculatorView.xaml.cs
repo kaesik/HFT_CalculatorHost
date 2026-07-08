@@ -16,12 +16,18 @@ public partial class CalculatorView {
     private const double MinimumZoom = 0.75;
     private const double MaximumZoom = 1.50;
     private const double ZoomStep = 0.25;
+    private const double NormalizedBorderThickness = 0.50;
+    private const double DefaultCellFontSize = 11.0;
+    private const double MinimumCellFontSize = 9.0;
+    private const double MaximumCellFontSize = 12.0;
 
     private readonly CalculatorViewModel _viewModel;
     private bool _isChangingZoomInternally;
     private RenderedSheet? _renderedSheet;
     private bool _renderedSheetContainsNonCellElements;
     private SheetModel? _renderedSheetModel;
+    private int? _selectedCellColumn;
+    private int? _selectedCellRow;
     private double _zoomFactor = 1.0;
 
     public CalculatorView(CalculatorViewModel viewModel) {
@@ -50,9 +56,10 @@ public partial class CalculatorView {
 
         if (sheetModel == null) {
             SheetContentPresenter.Content = null;
-            SheetNameText.Text = "Arkusz: —";
-            SheetCounterText.Text = "Komórki: —";
+            SheetNameText.Text = "Arkusz: -";
+            SheetCounterText.Text = "Komórki: -";
             SheetInfoText.Text = string.Empty;
+            ClearSelectedCellPreview();
             _renderedSheet = null;
             _renderedSheetModel = null;
             _renderedSheetContainsNonCellElements = false;
@@ -60,6 +67,7 @@ public partial class CalculatorView {
         }
 
         var renderingStopwatch = Stopwatch.StartNew();
+        NormalizeSheetVisuals(sheetModel);
         var containsNonCellElements = ContainsNonCellElements(sheetModel);
 
         if (_renderedSheet != null &&
@@ -68,6 +76,7 @@ public partial class CalculatorView {
             !_renderedSheetContainsNonCellElements) {
             SheetRenderer.UpdateCellValues(_renderedSheet, sheetModel);
             UpdateSheetInformation(sheetModel);
+            RefreshSelectedCellPreview(sheetModel);
             renderingStopwatch.Stop();
             _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
             return;
@@ -76,13 +85,15 @@ public partial class CalculatorView {
         _renderedSheet = SheetRenderer.RenderSheet(
             sheetModel,
             OnInputChanged,
-            OnMacroButtonClicked);
+            OnMacroButtonClicked,
+            OnCellSelected);
 
         _renderedSheetModel = sheetModel;
         _renderedSheetContainsNonCellElements = containsNonCellElements;
         SheetContentPresenter.Content = _renderedSheet.Canvas;
         ApplyZoom();
         UpdateSheetInformation(sheetModel);
+        RefreshSelectedCellPreview(sheetModel);
         renderingStopwatch.Stop();
         _viewModel.ReportRenderingDuration(renderingStopwatch.Elapsed);
     }
@@ -90,6 +101,33 @@ public partial class CalculatorView {
     private static bool ContainsNonCellElements(SheetModel sheetModel) {
         return sheetModel.Images.Count > 0 ||
                sheetModel.MacroButtons.Any(button => button.IsSheetButton);
+    }
+
+    private static void NormalizeSheetVisuals(SheetModel sheetModel) {
+        foreach (var cell in sheetModel.Cells) {
+            if (cell.IsMergedSlave)
+                continue;
+
+            cell.BorderTopThickness = NormalizeBorderThickness(cell.BorderTopThickness);
+            cell.BorderBottomThickness = NormalizeBorderThickness(cell.BorderBottomThickness);
+            cell.BorderLeftThickness = NormalizeBorderThickness(cell.BorderLeftThickness);
+            cell.BorderRightThickness = NormalizeBorderThickness(cell.BorderRightThickness);
+            cell.BorderColor = Colors.Black;
+            cell.FontSize = NormalizeFontSize(cell.FontSize);
+        }
+    }
+
+    private static double NormalizeBorderThickness(double thickness) {
+        return thickness <= 0.0
+            ? 0.0
+            : NormalizedBorderThickness;
+    }
+
+    private static double NormalizeFontSize(double fontSize) {
+        if (double.IsNaN(fontSize) || double.IsInfinity(fontSize) || fontSize <= 0.0)
+            return DefaultCellFontSize;
+
+        return Math.Max(MinimumCellFontSize, Math.Min(MaximumCellFontSize, fontSize));
     }
 
     private void UpdateSheetInformation(SheetModel sheetModel) {
@@ -106,6 +144,91 @@ public partial class CalculatorView {
             $"Pól edytowalnych: {inputCount} · " +
             $"Dropdownów: {dropdownCount} · " +
             $"Obrazów: {sheetModel.Images.Count}";
+    }
+
+    private void OnCellSelected(CellModel cell) {
+        _selectedCellRow = cell.Row;
+        _selectedCellColumn = cell.Column;
+        UpdateSelectedCellPreview(cell);
+    }
+
+    private void RefreshSelectedCellPreview(SheetModel sheetModel) {
+        if (!_selectedCellRow.HasValue || !_selectedCellColumn.HasValue)
+            return;
+
+        var selectedCell = sheetModel.Cells.FirstOrDefault(cell =>
+            !cell.IsMergedSlave &&
+            cell.Row == _selectedCellRow.Value &&
+            cell.Column == _selectedCellColumn.Value);
+
+        if (selectedCell == null) {
+            ClearSelectedCellPreview();
+            return;
+        }
+
+        UpdateSelectedCellPreview(selectedCell);
+    }
+
+    private void UpdateSelectedCellPreview(CellModel cell) {
+        if (SelectedCellAddressText == null || SelectedCellContentBox == null)
+            return;
+
+        SelectedCellAddressText.Text = $"{GetExcelColumnName(cell.Column)}{cell.Row}";
+
+        var displayText = GetCellPreviewText(cell);
+        SelectedCellContentBox.Text = displayText;
+        SelectedCellContentBox.ToolTip = string.IsNullOrWhiteSpace(cell.FormulaText)
+            ? displayText
+            : $"{displayText}\n\nFormuła: {cell.FormulaText}";
+
+        SelectedCellContentBox.Foreground = Brushes.Black;
+        SelectedCellContentBox.Background = Brushes.White;
+        SelectedCellContentBox.Visibility = Visibility.Visible;
+    }
+
+    private static string GetCellPreviewText(CellModel cell) {
+        if (!string.IsNullOrWhiteSpace(cell.DisplayText))
+            return cell.DisplayText;
+
+        if (cell.RawValue != null) {
+            var rawText = cell.RawValue.ToString();
+            if (!string.IsNullOrWhiteSpace(rawText))
+                return rawText;
+        }
+
+        return !string.IsNullOrWhiteSpace(cell.FormulaText) ? cell.FormulaText : "";
+    }
+
+    private void ClearSelectedCellPreview() {
+        _selectedCellRow = null;
+        _selectedCellColumn = null;
+
+        if (SelectedCellAddressText != null)
+            SelectedCellAddressText.Text = "-";
+
+        if (SelectedCellContentBox == null)
+            return;
+
+        SelectedCellContentBox.Text = "Kliknij komórkę, aby zobaczyć jej pełną treść.";
+        SelectedCellContentBox.ToolTip = null;
+        SelectedCellContentBox.Foreground = Brushes.Black;
+        SelectedCellContentBox.Background = Brushes.White;
+    }
+
+    private static string GetExcelColumnName(int columnNumber) {
+        if (columnNumber <= 0)
+            return columnNumber.ToString();
+
+        var columnName = string.Empty;
+        var dividend = columnNumber;
+
+        while (dividend > 0) {
+            var modulo = (dividend - 1) % 26;
+            columnName = Convert.ToChar('A' + modulo) + columnName;
+            dividend = (dividend - modulo) / 26;
+        }
+
+        return columnName;
     }
 
     private void RebuildMacroButtons() {

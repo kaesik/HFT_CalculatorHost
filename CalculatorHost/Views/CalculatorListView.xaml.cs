@@ -233,7 +233,7 @@ public partial class CalculatorListView {
         }
         catch {
             MessageBox.Show(
-                Window.GetWindow(this),
+                Window.GetWindow(this)!,
                 "Nie udało się wgrać wybranej wersji. Sprawdź, czy to poprawny plik JSON pasujący do tego kalkulatora.",
                 "Nie udało się wgrać wersji",
                 MessageBoxButton.OK,

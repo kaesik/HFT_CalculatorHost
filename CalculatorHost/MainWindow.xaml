@@ -7,13 +7,14 @@
         Width="1380" Height="860"
         MinWidth="900" MinHeight="560"
         Background="Transparent"
-        AllowsTransparency="False">
+        AllowsTransparency="False"
+        Icon="/Assets/CalculatorHostIcon.png">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="0"
                       ResizeBorderThickness="6"
                       UseAeroCaptionButtons="False"
-                      GlassFrameThickness="0"/>
+                      GlassFrameThickness="0" />
     </WindowChrome.WindowChrome>
 
     <Border Background="{DynamicResource WindowBgBrush}"
@@ -21,8 +22,8 @@
             BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="*"/>
+                <RowDefinition Height="36" />
+                <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
             <!-- Title Bar -->
@@ -37,35 +38,35 @@
                                    FontFamily="Segoe UI Variable, Segoe UI"
                                    FontSize="10" FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
-                                   VerticalAlignment="Center"/>
+                                   VerticalAlignment="Center" />
                         <TextBlock x:Name="TitleCalculatorName"
                                    Text=""
                                    FontFamily="Segoe UI Variable, Segoe UI"
                                    FontSize="11"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
                                    VerticalAlignment="Center"
-                                   Margin="10,0,0,0"/>
+                                   Margin="10,0,0,0" />
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Style="{StaticResource IconButton}"
                                 Content="&#xE921;"
                                 ToolTip="Minimalizuj"
-                                Click="Minimize_Click"/>
+                                Click="Minimize_Click" />
                         <Button Style="{StaticResource IconButton}"
                                 Content="&#xE793;"
                                 ToolTip="Przełącz motyw (ciemny / jasny)"
-                                Click="ThemeToggle_Click"/>
+                                Click="ThemeToggle_Click" />
                         <Button Style="{StaticResource CloseButton}"
                                 Content="&#xE8BB;"
                                 ToolTip="Zamknij"
-                                Click="Close_Click"/>
+                                Click="Close_Click" />
                     </StackPanel>
                 </Grid>
             </Border>
 
             <!-- Main Content -->
-            <ContentControl x:Name="MainContent" Grid.Row="1"/>
+            <ContentControl x:Name="MainContent" Grid.Row="1" />
         </Grid>
     </Border>
 </Window>
