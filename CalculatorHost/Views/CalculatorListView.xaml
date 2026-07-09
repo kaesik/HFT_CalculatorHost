@@ -228,7 +228,7 @@
                                        Foreground="{DynamicResource TextTertiaryBrush}"
                                        Margin="0,0,0,4" />
                             <TextBlock
-                                Text="Dwuklik otwiera pozycję z listy. Przycisk Wgraj wersję kopiuje plik JSON do zapisanych wersji tego kalkulatora."
+                                Text="Dwuklik otwiera pozycję z listy. Gwiazdka dodaje wersję do ulubionych, a kosz usuwa zapisany JSON."
                                 FontSize="11"
                                 Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
@@ -248,6 +248,7 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions>
@@ -279,6 +280,42 @@
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                                        Margin="0,3,0,0"
                                                        TextTrimming="CharacterEllipsis" />
+
+                                            <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="3"
+                                                        Orientation="Horizontal"
+                                                        VerticalAlignment="Center"
+                                                        Margin="12,0,0,0"
+                                                        Visibility="{Binding ActionButtonsVisibility}">
+                                                <Button Style="{StaticResource IconButton}"
+                                                        Width="28"
+                                                        Height="28"
+                                                        Padding="0"
+                                                        Tag="{Binding}"
+                                                        ToolTip="{Binding FavoriteToolTip}"
+                                                        Click="FavoriteVersionButton_Click"
+                                                        PreviewMouseDoubleClick="VersionActionButton_PreviewMouseDoubleClick">
+                                                    <TextBlock Text="{Binding FavoriteIcon}"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="14"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center" />
+                                                </Button>
+                                                <Button Style="{StaticResource IconButton}"
+                                                        Width="28"
+                                                        Height="28"
+                                                        Padding="0"
+                                                        Tag="{Binding}"
+                                                        ToolTip="Usuń wersję"
+                                                        Click="DeleteVersionButton_Click"
+                                                        PreviewMouseDoubleClick="VersionActionButton_PreviewMouseDoubleClick"
+                                                        Margin="4,0,0,0">
+                                                    <TextBlock Text="&#xE74D;"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="14"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center" />
+                                                </Button>
+                                            </StackPanel>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>

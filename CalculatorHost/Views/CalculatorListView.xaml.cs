@@ -136,6 +136,66 @@ public partial class CalculatorListView {
         UploadVersionFromDisk();
     }
 
+    private void FavoriteVersionButton_Click(object sender, RoutedEventArgs e) {
+        e.Handled = true;
+
+        if ((sender as FrameworkElement)?.Tag is not VersionListEntry version || version.IsCurrentFile)
+            return;
+
+        var calculator = _viewModel.SelectedCalculator;
+        if (calculator == null) return;
+
+        var newFavoriteState = !version.IsFavorite;
+        VersionFavoritesStore.SetFavorite(version.FilePath, newFavoriteState);
+        RefreshVersionListAndSelect(calculator, version.FilePath);
+
+        VersionStatusText.Text = newFavoriteState
+            ? $"Dodano do ulubionych: {version.DisplayName}."
+            : $"Usunięto z ulubionych: {version.DisplayName}.";
+    }
+
+    private void DeleteVersionButton_Click(object sender, RoutedEventArgs e) {
+        e.Handled = true;
+
+        if ((sender as FrameworkElement)?.Tag is not VersionListEntry version || version.IsCurrentFile)
+            return;
+
+        var calculator = _viewModel.SelectedCalculator;
+        if (calculator == null) return;
+
+        var result = MessageBox.Show(
+            Window.GetWindow(this)!,
+            $"Usunąć wersję „{version.DisplayName}”?",
+            "Usuń wersję",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        try {
+            VersionFavoritesStore.RemoveFavorite(version.FilePath);
+
+            if (File.Exists(version.FilePath))
+                File.Delete(version.FilePath);
+
+            RefreshVersionListAndSelect(calculator, string.Empty);
+            VersionStatusText.Text = $"Usunięto wersję: {version.DisplayName}.";
+        }
+        catch {
+            MessageBox.Show(
+                Window.GetWindow(this)!,
+                "Nie udało się usunąć wybranej wersji.",
+                "Nie udało się usunąć wersji",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private void VersionActionButton_PreviewMouseDoubleClick(object sender, MouseButtonEventArgs e) {
+        e.Handled = true;
+    }
+
     private void UpdateSelectedCalculatorPanel() {
         var calculator = _viewModel.SelectedCalculator;
 
@@ -169,6 +229,7 @@ public partial class CalculatorListView {
 
         try {
             var matchingVersions = CalculatorVersionService.FindMatchingVersionFiles(calculator.FilePath);
+            var savedVersions = new List<VersionListEntry>();
 
             foreach (var matchingVersion in matchingVersions) {
                 var filePath = GetStringProperty(matchingVersion, "FilePath")
@@ -192,12 +253,25 @@ public partial class CalculatorListView {
                                 ?? GetDateTimeProperty(matchingVersion, "LastWriteTime")
                                 ?? File.GetLastWriteTime(filePath);
 
-                items.Add(VersionListEntry.CreateSavedVersion(filePath, displayName, createdAt));
+                savedVersions.Add(VersionListEntry.CreateSavedVersion(
+                    filePath,
+                    displayName,
+                    createdAt,
+                    VersionFavoritesStore.IsFavorite(filePath)));
             }
 
-            statusMessage = items.Count <= 1
+            items.AddRange(savedVersions
+                .OrderByDescending(version => version.IsFavorite)
+                .ThenByDescending(version => version.CreatedAt)
+                .ThenBy(version => version.DisplayName, StringComparer.CurrentCultureIgnoreCase));
+
+            var favoriteCount = savedVersions.Count(version => version.IsFavorite);
+
+            statusMessage = savedVersions.Count == 0
                 ? "Brak zapisanych wersji pasujących do tego kalkulatora."
-                : $"Znaleziono zapisane wersje: {items.Count - 1}.";
+                : favoriteCount > 0
+                    ? $"Znaleziono zapisane wersje: {savedVersions.Count}. Ulubione: {favoriteCount}."
+                    : $"Znaleziono zapisane wersje: {savedVersions.Count}.";
         }
         catch {
             statusMessage = "Nie udało się odczytać listy zapisanych wersji.";
@@ -310,18 +384,21 @@ public partial class CalculatorListView {
         return Path.Combine(versionsDirectory, $"{fileNameWithoutExtension}_{DateTime.Now:yyyyMMdd_HHmmss}{extension}");
     }
 
-    private void RefreshVersionListAndSelect(CalculatorInfo calculator, string importedVersionPath) {
+    private void RefreshVersionListAndSelect(CalculatorInfo calculator, string selectedVersionPath) {
         var versions = LoadVersionItems(calculator, out var versionStatusMessage);
         VersionList.ItemsSource = versions;
         VersionStatusText.Text = versionStatusMessage;
 
-        foreach (var version in versions)
-            if (!version.IsCurrentFile &&
-                string.Equals(version.FilePath, importedVersionPath, StringComparison.OrdinalIgnoreCase)) {
-                VersionList.SelectedItem = version;
-                VersionList.ScrollIntoView(version);
-                return;
-            }
+        if (!string.IsNullOrWhiteSpace(selectedVersionPath))
+            foreach (var version in versions)
+                if (!version.IsCurrentFile &&
+                    string.Equals(version.FilePath, selectedVersionPath, StringComparison.OrdinalIgnoreCase)) {
+                    VersionList.SelectedItem = version;
+                    VersionList.ScrollIntoView(version);
+                    return;
+                }
+
+        VersionList.SelectedIndex = versions.Count > 0 ? 0 : -1;
     }
 
     private void OpenCurrentCalculator() {
@@ -413,7 +490,12 @@ public sealed class VersionListEntry {
     public required string FilePath { get; init; }
     public required string SizeText { get; init; }
     public required string Icon { get; init; }
+    public DateTime CreatedAt { get; init; }
     public bool IsCurrentFile { get; init; }
+    public bool IsFavorite { get; init; }
+    public Visibility ActionButtonsVisibility => IsCurrentFile ? Visibility.Collapsed : Visibility.Visible;
+    public string FavoriteIcon => IsFavorite ? "\uE735" : "\uE734";
+    public string FavoriteToolTip => IsFavorite ? "Usuń z ulubionych" : "Dodaj do ulubionych";
 
     public static VersionListEntry CreateCurrent(CalculatorInfo calculator) {
         return new VersionListEntry {
@@ -422,18 +504,118 @@ public sealed class VersionListEntry {
             FilePath = calculator.FilePath,
             SizeText = CalculatorListView.FormatFileSize(calculator.FilePath),
             Icon = "\uE8A5",
-            IsCurrentFile = true
+            CreatedAt = File.Exists(calculator.FilePath)
+                ? File.GetLastWriteTime(calculator.FilePath)
+                : DateTime.MinValue,
+            IsCurrentFile = true,
+            IsFavorite = false
         };
     }
 
-    public static VersionListEntry CreateSavedVersion(string filePath, string displayName, DateTime createdAt) {
+    public static VersionListEntry CreateSavedVersion(
+        string filePath,
+        string displayName,
+        DateTime createdAt,
+        bool isFavorite) {
         return new VersionListEntry {
             DisplayName = displayName,
-            Details = $"Zapisano: {createdAt.ToString("dd.MM.yyyy HH:mm", CultureInfo.CurrentCulture)}",
+            Details = isFavorite
+                ? $"★ Ulubiona · Zapisano: {createdAt.ToString("dd.MM.yyyy HH:mm", CultureInfo.CurrentCulture)}"
+                : $"Zapisano: {createdAt.ToString("dd.MM.yyyy HH:mm", CultureInfo.CurrentCulture)}",
             FilePath = filePath,
             SizeText = CalculatorListView.FormatFileSize(filePath),
-            Icon = "\uE8AB",
-            IsCurrentFile = false
+            Icon = isFavorite ? "\uE735" : "\uE8AB",
+            CreatedAt = createdAt,
+            IsCurrentFile = false,
+            IsFavorite = isFavorite
         };
+    }
+}
+
+internal static class VersionFavoritesStore {
+    private static readonly object SyncRoot = new();
+
+    private static string StoreFilePath {
+        get {
+            var localApplicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var directory = string.IsNullOrWhiteSpace(localApplicationData)
+                ? AppDomain.CurrentDomain.BaseDirectory
+                : Path.Combine(localApplicationData, "CalculatorHost");
+
+            return Path.Combine(directory, "version-favorites.txt");
+        }
+    }
+
+    public static bool IsFavorite(string filePath) {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return false;
+
+        lock (SyncRoot) {
+            return LoadFavorites().Contains(NormalizePath(filePath));
+        }
+    }
+
+    public static void SetFavorite(string filePath, bool isFavorite) {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return;
+
+        lock (SyncRoot) {
+            var favorites = LoadFavorites();
+            var normalizedPath = NormalizePath(filePath);
+
+            if (isFavorite)
+                favorites.Add(normalizedPath);
+            else
+                favorites.Remove(normalizedPath);
+
+            SaveFavorites(favorites);
+        }
+    }
+
+    public static void RemoveFavorite(string filePath) {
+        SetFavorite(filePath, false);
+    }
+
+    private static HashSet<string> LoadFavorites() {
+        var favorites = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var storeFilePath = StoreFilePath;
+
+        if (!File.Exists(storeFilePath))
+            return favorites;
+
+        try {
+            foreach (var line in File.ReadAllLines(storeFilePath)) {
+                var normalizedLine = NormalizePath(line);
+                if (!string.IsNullOrWhiteSpace(normalizedLine))
+                    favorites.Add(normalizedLine);
+            }
+        }
+        catch {
+            // Jeśli plik ulubionych jest chwilowo niedostępny, lista działa dalej bez ulubionych.
+        }
+
+        return favorites;
+    }
+
+    private static void SaveFavorites(HashSet<string> favorites) {
+        var storeFilePath = StoreFilePath;
+        var directory = Path.GetDirectoryName(storeFilePath);
+
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        File.WriteAllLines(storeFilePath, favorites.OrderBy(path => path, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizePath(string filePath) {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return string.Empty;
+
+        try {
+            return Path.GetFullPath(filePath.Trim());
+        }
+        catch {
+            return filePath.Trim();
+        }
     }
 }
