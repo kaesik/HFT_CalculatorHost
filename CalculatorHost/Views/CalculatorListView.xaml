@@ -227,10 +227,6 @@
                                        FontWeight="SemiBold"
                                        Foreground="{DynamicResource TextTertiaryBrush}"
                                        Margin="0,0,0,4" />
-                            <TextBlock
-                                Text="Dwuklik otwiera pozycję z listy. Gwiazdka dodaje wersję do ulubionych, a kosz usuwa zapisany JSON."
-                                FontSize="11"
-                                Foreground="{DynamicResource TextSecondaryBrush}" />
                         </StackPanel>
 
                         <ListBox x:Name="VersionList"
@@ -238,17 +234,24 @@
                                  Background="Transparent"
                                  BorderThickness="0"
                                  Padding="0"
+                                 HorizontalContentAlignment="Stretch"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  SelectionChanged="VersionList_SelectionChanged"
                                  MouseDoubleClick="VersionList_MouseDoubleClick">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="{x:Type ListBoxItem}">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate DataType="{x:Type views:VersionListEntry}">
-                                    <Border Padding="10,8" Margin="0,0,0,6">
+                                    <Border Padding="10,8"
+                                            Margin="0,0,0,6"
+                                            HorizontalAlignment="Stretch">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <Grid.RowDefinitions>
@@ -264,25 +267,81 @@
                                                        VerticalAlignment="Top"
                                                        Margin="0,1,10,0" />
                                             <TextBlock Grid.Row="0" Grid.Column="1"
-                                                       Text="{Binding DisplayName}"
                                                        FontSize="13"
-                                                       FontWeight="SemiBold"
                                                        Foreground="{DynamicResource TextPrimaryBrush}"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Grid.Row="0" Grid.Column="2"
-                                                       Text="{Binding SizeText}"
-                                                       FontSize="10"
-                                                       Foreground="{DynamicResource TextTertiaryBrush}"
-                                                       Margin="12,2,0,0" />
-                                            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Visibility="{Binding DisplayNameVisibility}">
+                                                <Run Text="{Binding DisplayName}" FontWeight="SemiBold" />
+                                                <Run Text="  " />
+                                                <Run Text="{Binding SizeText}"
+                                                     FontSize="10"
+                                                     Foreground="{DynamicResource TextTertiaryBrush}" />
+                                            </TextBlock>
+
+                                            <Grid Grid.Row="0" Grid.Column="1"
+                                                  Margin="0,-2,0,0"
+                                                  Visibility="{Binding RenameEditorVisibility}"
+                                                  PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBox x:Name="InlineRenameTextBox"
+                                                         Grid.Column="0"
+                                                         Text="{Binding EditedName, UpdateSourceTrigger=PropertyChanged}"
+                                                         MinWidth="180"
+                                                         Padding="6,3"
+                                                         Tag="{Binding}"
+                                                         KeyDown="InlineRenameTextBox_KeyDown"
+                                                         Loaded="InlineRenameTextBox_Loaded"
+                                                         PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown" />
+                                                <Button Grid.Column="1"
+                                                        Style="{StaticResource IconButton}"
+                                                        Width="28"
+                                                        Height="28"
+                                                        Padding="0"
+                                                        Margin="6,0,0,0"
+                                                        Tag="{Binding}"
+                                                        ToolTip="Zapisz nazwę"
+                                                        Click="ConfirmInlineRenameButton_Click"
+                                                        PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown">
+                                                    <TextBlock Text="&#xE73E;"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="13"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center" />
+                                                </Button>
+                                                <Button Grid.Column="2"
+                                                        Style="{StaticResource IconButton}"
+                                                        Width="28"
+                                                        Height="28"
+                                                        Padding="0"
+                                                        Margin="4,0,0,0"
+                                                        Tag="{Binding}"
+                                                        ToolTip="Anuluj zmianę nazwy"
+                                                        Click="CancelInlineRenameButton_Click"
+                                                        PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown">
+                                                    <TextBlock Text="&#xE711;"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="13"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center" />
+                                                </Button>
+                                            </Grid>
+
+                                            <TextBlock Grid.Row="1" Grid.Column="1"
                                                        Text="{Binding Details}"
                                                        FontSize="10"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                                        Margin="0,3,0,0"
-                                                       TextTrimming="CharacterEllipsis" />
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Visibility="{Binding DisplayNameVisibility}" />
 
-                                            <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="3"
+                                            <StackPanel Grid.Row="0" Grid.RowSpan="2" Grid.Column="2"
                                                         Orientation="Horizontal"
+                                                        HorizontalAlignment="Right"
                                                         VerticalAlignment="Center"
                                                         Margin="12,0,0,0"
                                                         Visibility="{Binding ActionButtonsVisibility}">
@@ -292,8 +351,9 @@
                                                         Padding="0"
                                                         Tag="{Binding}"
                                                         ToolTip="{Binding FavoriteToolTip}"
+                                                        Visibility="{Binding SavedVersionButtonVisibility}"
                                                         Click="FavoriteVersionButton_Click"
-                                                        PreviewMouseDoubleClick="VersionActionButton_PreviewMouseDoubleClick">
+                                                        PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown">
                                                     <TextBlock Text="{Binding FavoriteIcon}"
                                                                FontFamily="Segoe MDL2 Assets"
                                                                FontSize="14"
@@ -305,15 +365,74 @@
                                                         Height="28"
                                                         Padding="0"
                                                         Tag="{Binding}"
-                                                        ToolTip="Usuń wersję"
-                                                        Click="DeleteVersionButton_Click"
-                                                        PreviewMouseDoubleClick="VersionActionButton_PreviewMouseDoubleClick"
+                                                        ToolTip="{Binding DefaultToolTip}"
+                                                        Visibility="{Binding CurrentFileDefaultButtonVisibility}"
+                                                        Click="DefaultVersionButton_Click"
+                                                        PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown"
                                                         Margin="4,0,0,0">
-                                                    <TextBlock Text="&#xE74D;"
+                                                    <TextBlock Text="{Binding DefaultIcon}"
                                                                FontFamily="Segoe MDL2 Assets"
                                                                FontSize="14"
                                                                VerticalAlignment="Center"
                                                                HorizontalAlignment="Center" />
+                                                </Button>
+                                                <Button Style="{StaticResource IconButton}"
+                                                        Width="28"
+                                                        Height="28"
+                                                        Padding="0"
+                                                        Tag="{Binding}"
+                                                        ToolTip="Więcej akcji"
+                                                        Visibility="{Binding MoreActionsButtonVisibility}"
+                                                        Click="VersionMoreActionsButton_Click"
+                                                        PreviewMouseLeftButtonDown="VersionActionButton_PreviewMouseLeftButtonDown"
+                                                        Margin="4,0,0,0">
+                                                    <TextBlock Text="&#xE712;"
+                                                               FontFamily="Segoe MDL2 Assets"
+                                                               FontSize="14"
+                                                               VerticalAlignment="Center"
+                                                               HorizontalAlignment="Center" />
+                                                    <Button.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Zmień nazwę"
+                                                                      Tag="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Visibility="{Binding PlacementTarget.Tag.SavedVersionButtonVisibility, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Click="RenameVersionButton_Click">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE8AC;"
+                                                                               FontFamily="Segoe MDL2 Assets" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <MenuItem Header="Kopiuj"
+                                                                      Tag="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Visibility="{Binding PlacementTarget.Tag.SavedVersionButtonVisibility, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Click="CopyVersionButton_Click">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE8C8;"
+                                                                               FontFamily="Segoe MDL2 Assets" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <MenuItem Header="Ustaw jako domyślną"
+                                                                      Tag="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Visibility="{Binding PlacementTarget.Tag.DefaultButtonVisibility, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Click="DefaultVersionButton_Click">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE718;"
+                                                                               FontFamily="Segoe MDL2 Assets" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                            <Separator
+                                                                Visibility="{Binding PlacementTarget.Tag.SavedVersionButtonVisibility, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}" />
+                                                            <MenuItem Header="Usuń"
+                                                                      Tag="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Visibility="{Binding PlacementTarget.Tag.SavedVersionButtonVisibility, RelativeSource={RelativeSource AncestorType={x:Type ContextMenu}}}"
+                                                                      Click="DeleteVersionButton_Click">
+                                                                <MenuItem.Icon>
+                                                                    <TextBlock Text="&#xE74D;"
+                                                                               FontFamily="Segoe MDL2 Assets" />
+                                                                </MenuItem.Icon>
+                                                            </MenuItem>
+                                                        </ContextMenu>
+                                                    </Button.ContextMenu>
                                                 </Button>
                                             </StackPanel>
                                         </Grid>
