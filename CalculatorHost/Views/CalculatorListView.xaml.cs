@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -469,6 +470,43 @@ public partial class CalculatorListView {
         button.ContextMenu.IsOpen = true;
     }
 
+    private void VersionPanelOptionsButton_Click(object sender, RoutedEventArgs e) {
+        e.Handled = true;
+
+        if (sender is not Button button || button.ContextMenu == null)
+            return;
+
+        button.ContextMenu.PlacementTarget = button;
+        button.ContextMenu.IsOpen = true;
+    }
+
+    private void ShowVersionsFolderMenuItem_Click(object sender, RoutedEventArgs e) {
+        e.Handled = true;
+
+        var calculator = _viewModel.SelectedCalculator;
+        if (calculator == null) return;
+
+        try {
+            var versionsDirectory = CalculatorVersionService.GetVersionsDirectory(calculator.FilePath);
+            Directory.CreateDirectory(versionsDirectory);
+
+            Process.Start(new ProcessStartInfo {
+                FileName = versionsDirectory,
+                UseShellExecute = true
+            });
+
+            VersionStatusText.Text = "Otworzono folder z wersjami.";
+        }
+        catch (Exception exception) {
+            MessageBox.Show(
+                Window.GetWindow(this)!,
+                FormatExceptionMessage("Nie udało się otworzyć folderu z wersjami", exception),
+                "Nie udało się otworzyć folderu",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
 
     private void UpdateSelectedCalculatorPanel() {
         var calculator = _viewModel.SelectedCalculator;
@@ -725,7 +763,7 @@ public partial class CalculatorListView {
             safeName = safeName.Replace(invalidCharacter, '_');
 
         safeName = string.Join(" ", safeName
-                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                .Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
             .Trim()
             .Trim('.');
 
