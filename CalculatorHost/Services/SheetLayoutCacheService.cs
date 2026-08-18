@@ -51,6 +51,28 @@ public class SheetLayoutCacheService {
         }
     }
 
+    public bool IsCacheCurrent(CalculatorInfo calculatorInfo) {
+        try {
+            if (!File.Exists(calculatorInfo.FilePath))
+                return false;
+
+            var cachePath = GetCachePath(calculatorInfo.FilePath);
+            if (!File.Exists(cachePath))
+                return false;
+
+            var json = File.ReadAllText(cachePath);
+            var document = JsonSerializer.Deserialize<SheetLayoutCacheDocument>(json, JsonOptions);
+
+            return document != null &&
+                   document.Version == CurrentCacheVersion &&
+                   document.Sheet != null &&
+                   IsCurrentFileCache(document, calculatorInfo);
+        }
+        catch {
+            return false;
+        }
+    }
+
     public bool TrySave(CalculatorInfo calculatorInfo, SheetModel model) {
         string? temporaryPath = null;
 
@@ -63,7 +85,6 @@ public class SheetLayoutCacheService {
             var sourceFileInformation = new FileInfo(calculatorInfo.FilePath);
             var document = new SheetLayoutCacheDocument {
                 Version = CurrentCacheVersion,
-                SourceFilePath = Path.GetFullPath(calculatorInfo.FilePath),
                 SourceFileName = GetCalculatorFileName(calculatorInfo),
                 CalculatorName = calculatorInfo.DisplayName,
                 SourceFileLength = sourceFileInformation.Length,
@@ -159,11 +180,7 @@ public class SheetLayoutCacheService {
 
         var sourceFileInformation = new FileInfo(calculatorInfo.FilePath);
 
-        return string.Equals(
-                   document.SourceFilePath,
-                   Path.GetFullPath(calculatorInfo.FilePath),
-                   StringComparison.OrdinalIgnoreCase) &&
-               document.SourceFileLength == sourceFileInformation.Length &&
+        return document.SourceFileLength == sourceFileInformation.Length &&
                document.SourceLastWriteTimeUtcTicks == sourceFileInformation.LastWriteTimeUtc.Ticks &&
                document.Sheet != null;
     }
@@ -174,19 +191,11 @@ public class SheetLayoutCacheService {
         if (document.Sheet == null)
             return false;
 
-        var currentPath = Path.GetFullPath(calculatorInfo.FilePath);
-
-        if (string.Equals(document.SourceFilePath, currentPath, StringComparison.OrdinalIgnoreCase))
-            return true;
-
         var currentFileName = GetCalculatorFileName(calculatorInfo);
-        var cachedFileName = !string.IsNullOrWhiteSpace(document.SourceFileName)
-            ? document.SourceFileName
-            : Path.GetFileName(document.SourceFilePath);
 
         if (!string.IsNullOrWhiteSpace(currentFileName) &&
-            !string.IsNullOrWhiteSpace(cachedFileName) &&
-            string.Equals(currentFileName, cachedFileName, StringComparison.OrdinalIgnoreCase))
+            !string.IsNullOrWhiteSpace(document.SourceFileName) &&
+            string.Equals(currentFileName, document.SourceFileName, StringComparison.OrdinalIgnoreCase))
             return true;
 
         return !string.IsNullOrWhiteSpace(document.CalculatorName) &&
@@ -308,7 +317,6 @@ public class SheetLayoutCacheService {
 
 public sealed class SheetLayoutCacheDocument {
     public int Version { get; init; }
-    public string SourceFilePath { get; init; } = string.Empty;
     public string SourceFileName { get; init; } = string.Empty;
     public string CalculatorName { get; init; } = string.Empty;
     public long SourceFileLength { get; init; }

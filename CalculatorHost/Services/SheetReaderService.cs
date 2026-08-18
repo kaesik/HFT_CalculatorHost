@@ -14,6 +14,12 @@ public enum SheetRefreshMode {
     Full
 }
 
+public sealed record SheetReadProgress(
+    string Stage,
+    double OverallPercentage,
+    double StagePercentage,
+    string Detail);
+
 public class SheetReaderService {
     private const double PointsToDips = 96.0 / 72.0;
 
@@ -79,13 +85,17 @@ public class SheetReaderService {
     private const int SecondInputRoleColorRow = 3;
     private const int OutputRoleColorRow = 4;
 
-    public SheetModel ReadFirstSheet(ExcelSessionService session) {
+    public SheetModel ReadFirstSheet(
+        ExcelSessionService session,
+        IProgress<SheetReadProgress>? progress = null) {
         dynamic? worksheet = null;
         dynamic? usedRange = null;
         dynamic? usedRows = null;
         dynamic? usedColumns = null;
 
         try {
+            ReportProgress(progress, "Analiza arkusza", 0.0, 0.0, "Ustalanie zakresu danych…");
+
             worksheet = session.GetFirstWorksheet();
             usedRange = worksheet.UsedRange;
             usedRows = usedRange.Rows;
@@ -111,14 +121,28 @@ public class SheetReaderService {
                 MaxColumn = readBounds.MaximumColumn
             };
 
-            var colorRoles = ReadColorRoles((object)worksheet);
+            var rowCount = Math.Max(model.MaxRow - model.FirstRow + 1, 0);
+            var columnCount = Math.Max(model.MaxColumn - model.FirstColumn + 1, 0);
 
-            ReadColumnWidths((object)worksheet, model);
-            ReadRowHeights((object)worksheet, model);
-            ReadCells((object)worksheet, model, colorRoles);
-            ReadDropdownElements((object)worksheet, model, colorRoles);
-            ReadImages((object)worksheet, model);
-            ReadMacroButtons((object)worksheet, model);
+            ReportProgress(
+                progress,
+                "Analiza arkusza",
+                3.0,
+                100.0,
+                $"Zakres: {rowCount} w. × {columnCount} kol.");
+
+            ReportProgress(progress, "Rozpoznawanie pól", 3.0, 0.0, "Odczyt kolorów pól…");
+            var colorRoles = ReadColorRoles((object)worksheet);
+            ReportProgress(progress, "Rozpoznawanie pól", 5.0, 100.0, "Gotowe");
+
+            ReadColumnWidths((object)worksheet, model, progress);
+            ReadRowHeights((object)worksheet, model, progress);
+            ReadCells((object)worksheet, model, colorRoles, progress);
+            ReadDropdownElements((object)worksheet, model, colorRoles, progress);
+            ReadImages((object)worksheet, model, progress);
+            ReadMacroButtons((object)worksheet, model, progress);
+
+            ReportProgress(progress, "Gotowe", 100.0, 100.0, "Arkusz został wczytany.");
 
             return model;
         }
@@ -133,7 +157,8 @@ public class SheetReaderService {
     public SheetModel RefreshCellValues(
         ExcelSessionService session,
         SheetModel model,
-        SheetRefreshMode refreshMode = SheetRefreshMode.Full) {
+        SheetRefreshMode refreshMode = SheetRefreshMode.Full,
+        IProgress<SheetReadProgress>? progress = null) {
         dynamic? worksheet = null;
         dynamic? cells = null;
 
@@ -142,8 +167,30 @@ public class SheetReaderService {
             cells = worksheet.Cells;
 
             var values = ReadRangeValues((object)worksheet, (object)cells, model);
+            var refreshableCells = model.Cells
+                .Where(cell => !cell.IsMergedSlave)
+                .ToList();
 
-            foreach (var cellModel in model.Cells.Where(cell => !cell.IsMergedSlave)) {
+            var valuesOverallEnd = refreshMode switch {
+                SheetRefreshMode.ValuesOnly => 100.0,
+                SheetRefreshMode.ValuesAndImages => 80.0,
+                _ => 75.0
+            };
+
+            ReportStageProgress(
+                progress,
+                "Odświeżanie wartości",
+                0.0,
+                valuesOverallEnd,
+                0,
+                refreshableCells.Count,
+                refreshableCells.Count == 0
+                    ? "Brak komórek do odświeżenia"
+                    : $"Komórka 0 z {refreshableCells.Count}");
+
+            var processedCells = 0;
+
+            foreach (var cellModel in refreshableCells) {
                 var rawValue = GetRangeValue(
                     values,
                     cellModel.Row - model.FirstRow + 1,
@@ -151,30 +198,45 @@ public class SheetReaderService {
 
                 cellModel.RawValue = rawValue;
 
-                if (!HasBulkContent(rawValue)) {
+                if (!HasBulkContent(rawValue))
                     cellModel.DisplayText = string.Empty;
-                    continue;
+                else {
+                    dynamic? cell = null;
+
+                    try {
+                        cell = cells[cellModel.Row, cellModel.Column];
+                        ReadDisplayText((object)cell, cellModel);
+                    }
+                    finally {
+                        ReleaseComObject(cell);
+                    }
                 }
 
-                dynamic? cell = null;
+                processedCells++;
 
-                try {
-                    cell = cells[cellModel.Row, cellModel.Column];
-                    ReadDisplayText((object)cell, cellModel);
-                }
-                finally {
-                    ReleaseComObject(cell);
-                }
+                ReportStageProgress(
+                    progress,
+                    "Odświeżanie wartości",
+                    0.0,
+                    valuesOverallEnd,
+                    processedCells,
+                    refreshableCells.Count,
+                    $"Komórka {processedCells} z {refreshableCells.Count}");
             }
 
             if (refreshMode == SheetRefreshMode.Full) {
+                ReportProgress(progress, "Rozpoznawanie pól", 75.0, 0.0, "Odczyt kolorów pól…");
                 var colorRoles = ReadColorRoles((object)worksheet);
+                ReportProgress(progress, "Rozpoznawanie pól", 78.0, 100.0, "Gotowe");
 
-                ReadDropdownElements((object)worksheet, model, colorRoles);
-                ReadImages((object)worksheet, model);
-                ReadMacroButtons((object)worksheet, model);
+                ReadDropdownElements((object)worksheet, model, colorRoles, progress, 78.0, 88.0);
+                ReadImages((object)worksheet, model, progress, 88.0, 95.0);
+                ReadMacroButtons((object)worksheet, model, progress, 95.0);
             }
-            else if (refreshMode == SheetRefreshMode.ValuesAndImages) ReadImages((object)worksheet, model);
+            else if (refreshMode == SheetRefreshMode.ValuesAndImages)
+                ReadImages((object)worksheet, model, progress, 80.0, 100.0);
+
+            ReportProgress(progress, "Gotowe", 100.0, 100.0, "Wartości arkusza zostały odświeżone.");
 
             return model;
         }
@@ -334,12 +396,25 @@ public class SheetReaderService {
         return colorHex != null && colorRoles.DropdownColors.Contains(colorHex);
     }
 
-    private static void ReadColumnWidths(object worksheetObject, SheetModel model) {
+    private static void ReadColumnWidths(
+        object worksheetObject,
+        SheetModel model,
+        IProgress<SheetReadProgress>? progress) {
         dynamic worksheet = worksheetObject;
         dynamic? columns = null;
 
         try {
             columns = worksheet.Columns;
+            var totalColumns = Math.Max(model.MaxColumn - model.FirstColumn + 1, 0);
+
+            ReportStageProgress(
+                progress,
+                "Odczyt szerokości kolumn",
+                5.0,
+                10.0,
+                0,
+                totalColumns,
+                totalColumns == 0 ? "Brak kolumn" : $"Kolumna 0 z {totalColumns}");
 
             for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
                 dynamic? columnRange = null;
@@ -360,6 +435,16 @@ public class SheetReaderService {
                 finally {
                     ReleaseComObject(columnRange);
                 }
+
+                var processedColumns = column - model.FirstColumn + 1;
+                ReportStageProgress(
+                    progress,
+                    "Odczyt szerokości kolumn",
+                    5.0,
+                    10.0,
+                    processedColumns,
+                    totalColumns,
+                    $"Kolumna {processedColumns} z {totalColumns}");
             }
         }
         finally {
@@ -367,12 +452,25 @@ public class SheetReaderService {
         }
     }
 
-    private static void ReadRowHeights(object worksheetObject, SheetModel model) {
+    private static void ReadRowHeights(
+        object worksheetObject,
+        SheetModel model,
+        IProgress<SheetReadProgress>? progress) {
         dynamic worksheet = worksheetObject;
         dynamic? rows = null;
 
         try {
             rows = worksheet.Rows;
+            var totalRows = Math.Max(model.MaxRow - model.FirstRow + 1, 0);
+
+            ReportStageProgress(
+                progress,
+                "Odczyt wysokości wierszy",
+                10.0,
+                15.0,
+                0,
+                totalRows,
+                totalRows == 0 ? "Brak wierszy" : $"Wiersz 0 z {totalRows}");
 
             for (var row = model.FirstRow; row <= model.MaxRow; row++) {
                 dynamic? rowRange = null;
@@ -393,6 +491,16 @@ public class SheetReaderService {
                 finally {
                     ReleaseComObject(rowRange);
                 }
+
+                var processedRows = row - model.FirstRow + 1;
+                ReportStageProgress(
+                    progress,
+                    "Odczyt wysokości wierszy",
+                    10.0,
+                    15.0,
+                    processedRows,
+                    totalRows,
+                    $"Wiersz {processedRows} z {totalRows}");
             }
         }
         finally {
@@ -400,7 +508,11 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadCells(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
+    private void ReadCells(
+        object worksheetObject,
+        SheetModel model,
+        CellColorRoles colorRoles,
+        IProgress<SheetReadProgress>? progress) {
         dynamic worksheet = worksheetObject;
         var mergedSlaveCells = new HashSet<(int Row, int Column)>();
         dynamic? cells = null;
@@ -408,10 +520,31 @@ public class SheetReaderService {
         try {
             cells = worksheet.Cells;
             var values = ReadRangeValues(worksheetObject, (object)cells, model);
+            var totalRows = Math.Max(model.MaxRow - model.FirstRow + 1, 0);
+
+            ReportStageProgress(
+                progress,
+                "Odczyt komórek",
+                15.0,
+                85.0,
+                0,
+                totalRows,
+                totalRows == 0 ? "Brak komórek" : $"Wiersz 0 z {totalRows}");
 
             for (var row = model.FirstRow; row <= model.MaxRow; row++) {
-                if (model.RowHeights.TryGetValue(row, out var rowHeight) && rowHeight == 0.0)
+                var processedRows = row - model.FirstRow + 1;
+
+                if (model.RowHeights.TryGetValue(row, out var rowHeight) && rowHeight == 0.0) {
+                    ReportStageProgress(
+                        progress,
+                        "Odczyt komórek",
+                        15.0,
+                        85.0,
+                        processedRows,
+                        totalRows,
+                        $"Wiersz {processedRows} z {totalRows}");
                     continue;
+                }
 
                 for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
                     if (model.ColumnWidths.TryGetValue(column, out var columnWidth) && columnWidth == 0.0)
@@ -468,6 +601,15 @@ public class SheetReaderService {
                         ReleaseComObject(cell);
                     }
                 }
+
+                ReportStageProgress(
+                    progress,
+                    "Odczyt komórek",
+                    15.0,
+                    85.0,
+                    processedRows,
+                    totalRows,
+                    $"Wiersz {processedRows} z {totalRows}");
             }
         }
         finally {
@@ -873,11 +1015,39 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadDropdownElements(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
+    private void ReadDropdownElements(
+        object worksheetObject,
+        SheetModel model,
+        CellColorRoles colorRoles,
+        IProgress<SheetReadProgress>? progress = null,
+        double overallStart = 85.0,
+        double overallEnd = 92.0) {
+        const int stageCount = 4;
+
+        ReportStageProgress(
+            progress,
+            "Odczyt list rozwijanych",
+            overallStart,
+            overallEnd,
+            0,
+            stageCount,
+            "Walidacje danych");
+
         ReadDataValidationDropdowns(worksheetObject, model, colorRoles);
+        ReportStageProgress(progress, "Odczyt list rozwijanych", overallStart, overallEnd, 1, stageCount,
+            "Kontrolki formularza");
+
         ReadFormControlDropdowns(worksheetObject, model, colorRoles);
+        ReportStageProgress(progress, "Odczyt list rozwijanych", overallStart, overallEnd, 2, stageCount,
+            "Kontrolki ActiveX");
+
         ReadActiveXDropdowns(worksheetObject, model, colorRoles);
+        ReportStageProgress(progress, "Odczyt list rozwijanych", overallStart, overallEnd, 3, stageCount,
+            "Kontrolki komórkowe");
+
         ReadCellControlDropdowns(worksheetObject, model);
+        ReportStageProgress(progress, "Odczyt list rozwijanych", overallStart, overallEnd, 4, stageCount,
+            "Gotowe");
     }
 
     private void ReadCellControlDropdowns(object worksheetObject, SheetModel model) {
@@ -2000,10 +2170,24 @@ public class SheetReaderService {
                column <= model.MaxColumn;
     }
 
-    private static void ReadMacroButtons(object worksheetObject, SheetModel model) {
+    private static void ReadMacroButtons(
+        object worksheetObject,
+        SheetModel model,
+        IProgress<SheetReadProgress>? progress = null,
+        double overallStart = 97.0,
+        double overallEnd = 100.0) {
         model.MacroButtons.Clear();
+
+        ReportStageProgress(progress, "Odczyt przycisków i makr", overallStart, overallEnd, 0, 2,
+            "Przyciski arkusza");
         ReadShapeMacroButtons(worksheetObject, model);
+
+        ReportStageProgress(progress, "Odczyt przycisków i makr", overallStart, overallEnd, 1, 2,
+            "Przyciski ActiveX");
         ReadActiveXCommandButtons(worksheetObject, model);
+
+        ReportStageProgress(progress, "Odczyt przycisków i makr", overallStart, overallEnd, 2, 2,
+            "Gotowe");
     }
 
     private static void ReadShapeMacroButtons(object worksheetObject, SheetModel model) {
@@ -2261,7 +2445,12 @@ public class SheetReaderService {
         return macroName.Trim();
     }
 
-    private static void ReadImages(object worksheetObject, SheetModel model) {
+    private static void ReadImages(
+        object worksheetObject,
+        SheetModel model,
+        IProgress<SheetReadProgress>? progress = null,
+        double overallStart = 92.0,
+        double overallEnd = 97.0) {
         dynamic worksheet = worksheetObject;
         dynamic? shapes = null;
         dynamic? cells = null;
@@ -2269,13 +2458,17 @@ public class SheetReaderService {
 
         model.Images.Clear();
 
+        ReportProgress(progress, "Odczyt obrazów", overallStart, 0.0, "Sprawdzanie elementów graficznych…");
+
         try {
             shapes = worksheet.Shapes;
 
             var shapeCount = Convert.ToInt32(shapes.Count);
 
-            if (shapeCount == 0)
+            if (shapeCount == 0) {
+                ReportProgress(progress, "Odczyt obrazów", overallEnd, 100.0, "Brak obrazów");
                 return;
+            }
 
             cells = worksheet.Cells;
             originCell = cells[model.FirstRow, model.FirstColumn];
@@ -2322,6 +2515,7 @@ public class SheetReaderService {
             ReleaseComObject(originCell);
             ReleaseComObject(cells);
             ReleaseComObject(shapes);
+            ReportProgress(progress, "Odczyt obrazów", overallEnd, 100.0, "Gotowe");
         }
     }
 
@@ -2452,6 +2646,45 @@ public class SheetReaderService {
             ExcelBorderWeightThick => 3.0,
             _ => 1.0
         };
+    }
+
+    private static void ReportStageProgress(
+        IProgress<SheetReadProgress>? progress,
+        string stage,
+        double overallStart,
+        double overallEnd,
+        int current,
+        int total,
+        string detail) {
+        if (progress == null)
+            return;
+
+        var stagePercentage = total <= 0
+            ? 100.0
+            : Math.Clamp(current * 100.0 / total, 0.0, 100.0);
+
+        var overallPercentage = overallStart +
+                                (overallEnd - overallStart) * stagePercentage / 100.0;
+
+        ReportProgress(
+            progress,
+            stage,
+            overallPercentage,
+            stagePercentage,
+            detail);
+    }
+
+    private static void ReportProgress(
+        IProgress<SheetReadProgress>? progress,
+        string stage,
+        double overallPercentage,
+        double stagePercentage,
+        string detail) {
+        progress?.Report(new SheetReadProgress(
+            stage,
+            Math.Clamp(overallPercentage, 0.0, 100.0),
+            Math.Clamp(stagePercentage, 0.0, 100.0),
+            detail));
     }
 
     private static void ReleaseComObject(object? comObject) {

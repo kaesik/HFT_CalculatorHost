@@ -56,6 +56,11 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private string _errorMessage = string.Empty;
     private bool _hasPendingChanges;
     private bool _isLoading;
+    private string _loadingDetail = string.Empty;
+    private string _loadingStage = string.Empty;
+    private string _loadingTitle = "Ładowanie kalkulatora";
+    private double _overallProgress;
+    private double _stageProgress;
     private ObservableCollection<MacroButtonConfig> _macroButtons = [];
     private string _operationPerformanceMessage = string.Empty;
     private string _performanceMessage = string.Empty;
@@ -104,6 +109,67 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             CommandManager.InvalidateRequerySuggested();
         }
     }
+
+    public string LoadingTitle {
+        get => _loadingTitle;
+        private set {
+            if (_loadingTitle == value) return;
+
+            _loadingTitle = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string LoadingStage {
+        get => _loadingStage;
+        private set {
+            if (_loadingStage == value) return;
+
+            _loadingStage = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string LoadingDetail {
+        get => _loadingDetail;
+        private set {
+            if (_loadingDetail == value) return;
+
+            _loadingDetail = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public double OverallProgress {
+        get => _overallProgress;
+        private set {
+            var normalizedValue = Math.Clamp(value, 0.0, 100.0);
+
+            if (Math.Abs(_overallProgress - normalizedValue) < 0.01)
+                return;
+
+            _overallProgress = normalizedValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(OverallProgressText));
+        }
+    }
+
+    public double StageProgress {
+        get => _stageProgress;
+        private set {
+            var normalizedValue = Math.Clamp(value, 0.0, 100.0);
+
+            if (Math.Abs(_stageProgress - normalizedValue) < 0.01)
+                return;
+
+            _stageProgress = normalizedValue;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(StageProgressText));
+        }
+    }
+
+    public string OverallProgressText => $"{OverallProgress:0}%";
+    public string StageProgressText => $"{StageProgress:0}%";
 
     public string ErrorMessage {
         get => _errorMessage;
@@ -190,6 +256,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ErrorMessage = string.Empty;
         StatusMessage = "Tworzenie kopii roboczej…";
         ClearPerformanceMessage();
+        SetLoadingProgress(
+            "Ładowanie kalkulatora",
+            "Tworzenie kopii roboczej",
+            0.0,
+            0.0,
+            "Przygotowywanie pliku kalkulatora…");
 
         var operationName = "tworzenia kopii roboczej";
 
@@ -202,38 +274,103 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             var workingPath = _workingCopy.CreateWorkingCopy(calculatorInfo.FilePath);
             workingCopyStopwatch.Stop();
 
+            SetLoadingProgress(
+                "Ładowanie kalkulatora",
+                "Tworzenie kopii roboczej",
+                10.0,
+                100.0,
+                "Kopia robocza gotowa");
+
             operationName = "uruchamiania programu Excel i otwierania skoroszytu";
             StatusMessage = "Uruchamianie Excela…";
+            SetLoadingProgress(
+                "Ładowanie kalkulatora",
+                "Uruchamianie Excela",
+                10.0,
+                0.0,
+                "Otwieranie skoroszytu…");
+
             var openingStopwatch = Stopwatch.StartNew();
             await _worker.InvokeAsync(() => _excelSession.OpenSession(workingPath));
             openingStopwatch.Stop();
 
+            SetLoadingProgress(
+                "Ładowanie kalkulatora",
+                "Uruchamianie Excela",
+                25.0,
+                100.0,
+                "Skoroszyt otwarty");
+
             operationName = "sprawdzania pamięci układu arkusza";
             StatusMessage = "Sprawdzanie pamięci układu…";
+            SetLoadingProgress(
+                "Ładowanie kalkulatora",
+                "Sprawdzanie pamięci układu",
+                25.0,
+                0.0,
+                "Szukanie zapisanego układu arkusza…");
+
             var cacheLoadStopwatch = Stopwatch.StartNew();
             var isLayoutLoadedFromCache = _sheetLayoutCache.TryLoad(calculatorInfo, out var cachedModel);
             cacheLoadStopwatch.Stop();
+
+            var loadingTitle = isLayoutLoadedFromCache
+                ? "Ładowanie kalkulatora"
+                : "Pierwsze wczytanie kalkulatora";
+
+            SetLoadingProgress(
+                loadingTitle,
+                "Sprawdzanie pamięci układu",
+                30.0,
+                100.0,
+                isLayoutLoadedFromCache
+                    ? "Znaleziono zapisany układ arkusza"
+                    : "Brak cache — układ zostanie odczytany z Excela");
 
             operationName = isLayoutLoadedFromCache
                 ? "odświeżania wartości arkusza"
                 : "odczytu pierwszego arkusza";
             StatusMessage = isLayoutLoadedFromCache
                 ? "Odczyt wartości arkusza…"
-                : "Odczyt arkusza…";
+                : "Pierwsze wczytanie arkusza…";
+
+            SetLoadingProgress(
+                loadingTitle,
+                isLayoutLoadedFromCache ? "Odświeżanie wartości arkusza" : "Odczyt arkusza",
+                30.0,
+                0.0,
+                isLayoutLoadedFromCache
+                    ? "Aktualizowanie danych z Excela…"
+                    : "Tworzenie pamięci układu. Ten etap może potrwać dłużej.");
 
             var readingStopwatch = Stopwatch.StartNew();
             SheetModel model;
+            var sheetProgress = CreateSheetProgress(loadingTitle, 30.0, 90.0);
 
             if (isLayoutLoadedFromCache && cachedModel != null)
-                model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, cachedModel));
+                model = await _worker.InvokeAsync(() =>
+                    _sheetReader.RefreshCellValues(
+                        _excelSession,
+                        cachedModel,
+                        progress: sheetProgress));
             else
-                model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
+                model = await _worker.InvokeAsync(() =>
+                    _sheetReader.ReadFirstSheet(
+                        _excelSession,
+                        sheetProgress));
 
             readingStopwatch.Stop();
 
             var cacheSaveMessage = string.Empty;
 
             if (!isLayoutLoadedFromCache) {
+                SetLoadingProgress(
+                    loadingTitle,
+                    "Zapisywanie pamięci układu",
+                    90.0,
+                    0.0,
+                    "Zapisywanie cache dla kolejnych uruchomień…");
+
                 var cacheSaveStopwatch = Stopwatch.StartNew();
                 var isCacheSaved = _sheetLayoutCache.TrySave(calculatorInfo, model);
                 cacheSaveStopwatch.Stop();
@@ -241,12 +378,40 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 cacheSaveMessage = isCacheSaved
                     ? $" · Zapis cache: {FormatDuration(cacheSaveStopwatch.Elapsed)}"
                     : " · Zapis cache: niepowodzenie";
+
+                SetLoadingProgress(
+                    loadingTitle,
+                    "Zapisywanie pamięci układu",
+                    94.0,
+                    100.0,
+                    isCacheSaved ? "Cache zapisany" : "Nie udało się zapisać cache");
             }
+            else
+                SetLoadingProgress(
+                    loadingTitle,
+                    "Pamięć układu",
+                    94.0,
+                    100.0,
+                    "Układ wczytany z cache");
 
             operationName = "wczytywania konfiguracji makr";
+            SetLoadingProgress(
+                loadingTitle,
+                "Wczytywanie konfiguracji makr",
+                94.0,
+                0.0,
+                "Przygotowywanie przycisków…");
+
             var macroConfigurationStopwatch = Stopwatch.StartNew();
             var buttons = MacroConfigService.LoadForCalculator(calculatorInfo.FilePath);
             macroConfigurationStopwatch.Stop();
+
+            SetLoadingProgress(
+                loadingTitle,
+                "Wczytywanie konfiguracji makr",
+                96.0,
+                100.0,
+                "Konfiguracja gotowa");
 
             if (_disposed) return;
 
@@ -267,18 +432,44 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 $"{readMessage}" +
                 $"{cacheSaveMessage} · " +
                 $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)}");
+
+            SetLoadingProgress(
+                loadingTitle,
+                "Renderowanie arkusza",
+                96.0,
+                0.0,
+                "Budowanie widoku kalkulatora…");
+
             SheetModel = model;
             MacroButtons = new ObservableCollection<MacroButtonConfig>(buttons);
+
+            SetLoadingProgress(
+                loadingTitle,
+                "Renderowanie arkusza",
+                98.0,
+                100.0,
+                "Widok arkusza gotowy");
 
             var startupVersionPath = CalculatorStartupVersionSelection.Take(calculatorInfo.FilePath);
 
             if (!string.IsNullOrWhiteSpace(startupVersionPath)) {
                 operationName = "wczytywania wybranej wersji";
                 StatusMessage = "Wczytywanie wybranej wersji…";
-                StatusMessage = await ApplyVersionFileAsync(startupVersionPath);
+                StatusMessage = await ApplyVersionFileAsync(
+                    startupVersionPath,
+                    loadingTitle,
+                    98.0,
+                    100.0);
             }
-            else
+            else {
+                SetLoadingProgress(
+                    loadingTitle,
+                    "Gotowe",
+                    100.0,
+                    100.0,
+                    "Kalkulator jest gotowy do pracy");
                 StatusMessage = string.Empty;
+            }
         }
         catch (Exception exception) {
             if (!_disposed) {
@@ -365,9 +556,19 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ErrorMessage = string.Empty;
         StatusMessage = "Wczytywanie wersji…";
         ClearPerformanceMessage();
+        SetLoadingProgress(
+            "Wczytywanie wersji",
+            "Przygotowanie wersji",
+            0.0,
+            0.0,
+            "Odczyt zapisanych wartości…");
 
         try {
-            StatusMessage = await ApplyVersionFileAsync(versionFilePath);
+            StatusMessage = await ApplyVersionFileAsync(
+                versionFilePath,
+                "Wczytywanie wersji",
+                0.0,
+                100.0);
         }
         catch (Exception exception) {
             if (!_disposed)
@@ -379,7 +580,11 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         }
     }
 
-    private async Task<string> ApplyVersionFileAsync(string versionFilePath) {
+    private async Task<string> ApplyVersionFileAsync(
+        string versionFilePath,
+        string loadingTitle = "Wczytywanie wersji",
+        double overallStart = 0.0,
+        double overallEnd = 100.0) {
         if (SheetModel == null)
             throw new InvalidOperationException("Nie ma wczytanego arkusza, więc nie można wczytać wersji.");
 
@@ -407,6 +612,16 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             throw new InvalidOperationException(
                 "Plik wersji nie zawiera pól, które istnieją jako edytowalne pola w aktualnym arkuszu.");
 
+        var range = Math.Max(overallEnd - overallStart, 0.0);
+        var applyingEnd = overallStart + range * 0.35;
+
+        SetLoadingProgress(
+            loadingTitle,
+            "Wprowadzanie zapisanych wartości",
+            overallStart,
+            0.0,
+            $"Pola do zastosowania: {values.Count}");
+
         var applyingStopwatch = Stopwatch.StartNew();
         await _worker.InvokeAsync(() => {
             WritePendingValues(values);
@@ -414,13 +629,25 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         });
         applyingStopwatch.Stop();
 
+        SetLoadingProgress(
+            loadingTitle,
+            "Wprowadzanie zapisanych wartości",
+            applyingEnd,
+            100.0,
+            $"Zastosowano {values.Count} pól");
+
         var currentModel = SheetModel;
 
         if (currentModel == null)
             return string.Empty;
 
         var refreshStopwatch = Stopwatch.StartNew();
-        var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+        var refreshProgress = CreateSheetProgress(loadingTitle, applyingEnd, overallEnd);
+        var model = await _worker.InvokeAsync(() =>
+            _sheetReader.RefreshCellValues(
+                _excelSession,
+                currentModel,
+                progress: refreshProgress));
         refreshStopwatch.Stop();
 
         if (_disposed)
@@ -431,7 +658,22 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         SetOperationPerformanceMessage(
             $"Wczytanie wersji: {FormatDuration(applyingStopwatch.Elapsed)} · " +
             $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
+
+        SetLoadingProgress(
+            loadingTitle,
+            "Renderowanie arkusza",
+            Math.Max(overallEnd - range * 0.02, overallStart),
+            0.0,
+            "Aktualizowanie widoku…");
+
         SheetModel = model;
+
+        SetLoadingProgress(
+            loadingTitle,
+            "Gotowe",
+            overallEnd,
+            100.0,
+            "Wersja została wczytana");
 
         return skippedValuesCount > 0
             ? $"Wczytano wersję: {Path.GetFileName(versionFilePath)} (zastosowano {values.Count} z {version.Values.Count} pól)"
@@ -466,6 +708,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ErrorMessage = string.Empty;
         StatusMessage = "Przeliczanie…";
         ClearPerformanceMessage();
+        SetLoadingProgress(
+            "Przeliczanie kalkulatora",
+            "Zapisywanie zmian i przeliczanie",
+            0.0,
+            0.0,
+            "Przekazywanie wartości do Excela…");
 
         var pendingValues = BuildPendingValuesWithSynchronizedDropdowns(_pendingCellValues.ToList());
 
@@ -481,13 +729,25 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             });
             recalculationStopwatch.Stop();
 
+            SetLoadingProgress(
+                "Przeliczanie kalkulatora",
+                "Zapisywanie zmian i przeliczanie",
+                40.0,
+                100.0,
+                "Excel zakończył przeliczanie");
+
             var currentModel = SheetModel;
 
             if (currentModel == null)
                 return;
 
             var refreshStopwatch = Stopwatch.StartNew();
-            var model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+            var refreshProgress = CreateSheetProgress("Przeliczanie kalkulatora", 40.0, 96.0);
+            var model = await _worker.InvokeAsync(() =>
+                _sheetReader.RefreshCellValues(
+                    _excelSession,
+                    currentModel,
+                    progress: refreshProgress));
             refreshStopwatch.Stop();
 
             if (_disposed) return;
@@ -497,7 +757,23 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             SetOperationPerformanceMessage(
                 $"Przeliczenie: {FormatDuration(recalculationStopwatch.Elapsed)} · " +
                 $"Odświeżenie wartości: {FormatDuration(refreshStopwatch.Elapsed)}");
+
+            SetLoadingProgress(
+                "Przeliczanie kalkulatora",
+                "Renderowanie arkusza",
+                96.0,
+                0.0,
+                "Aktualizowanie widoku…");
+
             SheetModel = model;
+
+            SetLoadingProgress(
+                "Przeliczanie kalkulatora",
+                "Gotowe",
+                100.0,
+                100.0,
+                "Wyniki zostały zaktualizowane");
+
             StatusMessage = string.Empty;
         }
         catch (Exception exception) {
@@ -519,6 +795,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ErrorMessage = string.Empty;
         StatusMessage = $"Wykonywanie: {config.Label}…";
         ClearPerformanceMessage();
+        SetLoadingProgress(
+            "Wykonywanie makra",
+            config.Label,
+            0.0,
+            0.0,
+            "Excel wykonuje operację…");
 
         var pendingValues = BuildPendingValuesWithSynchronizedDropdowns(_pendingCellValues.ToList());
 
@@ -534,17 +816,32 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             });
             macroStopwatch.Stop();
 
+            SetLoadingProgress(
+                "Wykonywanie makra",
+                config.Label,
+                40.0,
+                100.0,
+                "Makro zakończone — odświeżanie arkusza");
+
             var currentModel = SheetModel;
             var refreshStopwatch = Stopwatch.StartNew();
             SheetModel model;
             string refreshOperationName;
+            var refreshProgress = CreateSheetProgress("Wykonywanie makra", 40.0, 96.0);
 
             if (config.RefreshLayoutAfterRun || currentModel == null) {
-                model = await _worker.InvokeAsync(() => _sheetReader.ReadFirstSheet(_excelSession));
+                model = await _worker.InvokeAsync(() =>
+                    _sheetReader.ReadFirstSheet(
+                        _excelSession,
+                        refreshProgress));
                 refreshOperationName = "Pełny odczyt arkusza";
             }
             else {
-                model = await _worker.InvokeAsync(() => _sheetReader.RefreshCellValues(_excelSession, currentModel));
+                model = await _worker.InvokeAsync(() =>
+                    _sheetReader.RefreshCellValues(
+                        _excelSession,
+                        currentModel,
+                        progress: refreshProgress));
                 refreshOperationName = "Odświeżenie wartości";
             }
 
@@ -557,7 +854,23 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             SetOperationPerformanceMessage(
                 $"Makro: {FormatDuration(macroStopwatch.Elapsed)} · " +
                 $"{refreshOperationName}: {FormatDuration(refreshStopwatch.Elapsed)}");
+
+            SetLoadingProgress(
+                "Wykonywanie makra",
+                "Renderowanie arkusza",
+                96.0,
+                0.0,
+                "Aktualizowanie widoku…");
+
             SheetModel = model;
+
+            SetLoadingProgress(
+                "Wykonywanie makra",
+                "Gotowe",
+                100.0,
+                100.0,
+                "Operacja zakończona");
+
             StatusMessage = string.Empty;
         }
         catch (Exception exception) {
@@ -1036,6 +1349,42 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
         foreach (var cell in model.Cells.Where(cell => !cell.IsMergedSlave))
             _committedCellValues[(cell.Row, cell.Column)] = cell.DisplayText;
+    }
+
+    private IProgress<SheetReadProgress> CreateSheetProgress(
+        string loadingTitle,
+        double overallStart,
+        double overallEnd) {
+        return new Progress<SheetReadProgress>(progress => {
+            if (_disposed)
+                return;
+
+            var mappedOverall = overallStart +
+                                (overallEnd - overallStart) *
+                                Math.Clamp(progress.OverallPercentage, 0.0, 100.0) / 100.0;
+
+            SetLoadingProgress(
+                loadingTitle,
+                progress.Stage,
+                mappedOverall,
+                progress.StagePercentage,
+                progress.Detail);
+
+            StatusMessage = progress.Stage;
+        });
+    }
+
+    private void SetLoadingProgress(
+        string title,
+        string stage,
+        double overallProgress,
+        double stageProgress,
+        string detail) {
+        LoadingTitle = title;
+        LoadingStage = stage;
+        LoadingDetail = detail;
+        OverallProgress = overallProgress;
+        StageProgress = stageProgress;
     }
 
     private void ClearPerformanceMessage() {

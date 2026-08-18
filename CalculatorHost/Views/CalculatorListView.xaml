@@ -112,11 +112,21 @@
                                    FontSize="10"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
                                    VerticalAlignment="Center" />
-                        <Button Style="{StaticResource IconButton}"
-                                HorizontalAlignment="Right"
-                                Content="&#xE72C;"
-                                ToolTip="Odśwież listę kalkulatorów"
-                                Command="{Binding RefreshCommand}" />
+
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right">
+                            <Button x:Name="UpdateAllCachesButton"
+                                    Style="{StaticResource IconButton}"
+                                    Content="&#xE895;"
+                                    ToolTip="Aktualizuj pamięć wszystkich kalkulatorów"
+                                    Click="UpdateAllCachesButton_Click"
+                                    Margin="0,0,4,0" />
+
+                            <Button Style="{StaticResource IconButton}"
+                                    Content="&#xE72C;"
+                                    ToolTip="Odśwież listę kalkulatorów"
+                                    Command="{Binding RefreshCommand}" />
+                        </StackPanel>
                     </Grid>
                 </Border>
             </Grid>
@@ -514,5 +524,149 @@
                 </DockPanel>
             </Border>
         </Grid>
+
+        <!-- Bulk cache update status -->
+        <Border x:Name="CacheUpdatePanel"
+                Grid.ColumnSpan="2"
+                VerticalAlignment="Bottom"
+                HorizontalAlignment="Center"
+                Width="620"
+                MaxWidth="760"
+                Margin="24"
+                Padding="18"
+                Panel.ZIndex="100"
+                Visibility="Collapsed"
+                Background="{DynamicResource SurfaceBgBrush}"
+                BorderBrush="{DynamicResource DividerColorBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="18"
+                                  ShadowDepth="3"
+                                  Opacity="0.25" />
+            </Border.Effect>
+
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel>
+                        <TextBlock x:Name="CacheUpdateTitleText"
+                                   Text="Aktualizacja pamięci kalkulatorów"
+                                   FontFamily="Segoe UI Variable, Segoe UI"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock x:Name="CacheUpdateCalculatorText"
+                                   Text=""
+                                   Margin="0,3,0,0"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+
+                    <Button x:Name="CloseCacheUpdatePanelButton"
+                            Grid.Column="1"
+                            Style="{StaticResource IconButton}"
+                            Content="&#xE711;"
+                            ToolTip="Zamknij"
+                            Click="CloseCacheUpdatePanelButton_Click" />
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Postęp całkowity"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextTertiaryBrush}" />
+                    <TextBlock x:Name="CacheUpdateOverallPercentText"
+                               Grid.Column="1"
+                               Text="0%"
+                               FontSize="10"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" />
+                </Grid>
+
+                <ProgressBar x:Name="CacheUpdateOverallProgressBar"
+                             Grid.Row="2"
+                             Height="8"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="0"
+                             Margin="0,5,0,0" />
+
+                <Grid Grid.Row="3" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel>
+                        <TextBlock x:Name="CacheUpdateStageText"
+                                   Text="Aktualny etap"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock x:Name="CacheUpdateDetailText"
+                                   Text=""
+                                   Margin="0,2,12,0"
+                                   FontSize="10"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="CacheUpdateStagePercentText"
+                               Grid.Column="1"
+                               Text="0%"
+                               FontSize="10"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               VerticalAlignment="Top" />
+                </Grid>
+
+                <ProgressBar x:Name="CacheUpdateStageProgressBar"
+                             Grid.Row="4"
+                             Height="8"
+                             Minimum="0"
+                             Maximum="100"
+                             Value="0"
+                             Margin="0,6,0,0" />
+
+                <Grid Grid.Row="5" Margin="0,14,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="CacheUpdateStatsText"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               VerticalAlignment="Center" />
+
+                    <Button x:Name="CancelCacheUpdateButton"
+                            Grid.Column="1"
+                            Content="Anuluj"
+                            MinWidth="90"
+                            Padding="12,6"
+                            IsEnabled="False"
+                            Click="CancelCacheUpdateButton_Click" />
+                </Grid>
+            </Grid>
+        </Border>
+
     </Grid>
 </UserControl>

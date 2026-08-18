@@ -18,10 +18,12 @@ namespace CalculatorHost.Views;
 
 public partial class CalculatorListView {
     private readonly MainViewModel _viewModel;
+    private CancellationTokenSource? _cacheUpdateCancellation;
     private List<CalculatorListEntry> _calculatorListItems = new();
     private VersionListEntry? _currentlyRenamedVersion;
     private bool _isRefreshingCalculatorList;
     private bool _isSubscribed;
+    private bool _isUpdatingCache;
 
     public CalculatorListView(MainViewModel viewModel) {
         InitializeComponent();
@@ -48,6 +50,8 @@ public partial class CalculatorListView {
     }
 
     private void CalculatorListView_Unloaded(object sender, RoutedEventArgs e) {
+        _cacheUpdateCancellation?.Cancel();
+
         if (!_isSubscribed) return;
 
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
@@ -807,6 +811,11 @@ public partial class CalculatorListView {
     }
 
     private void OpenCurrentCalculator() {
+        if (_isUpdatingCache) {
+            CacheUpdateDetailText.Text = "Aktualizacja cache jest w toku. Anuluj ją lub poczekaj na zakończenie.";
+            return;
+        }
+
         var calculator = _viewModel.SelectedCalculator;
         if (calculator == null) return;
 
@@ -822,6 +831,11 @@ public partial class CalculatorListView {
     }
 
     private void OpenSelectedVersion() {
+        if (_isUpdatingCache) {
+            CacheUpdateDetailText.Text = "Aktualizacja cache jest w toku. Anuluj ją lub poczekaj na zakończenie.";
+            return;
+        }
+
         var calculator = _viewModel.SelectedCalculator;
         var selectedVersion = VersionList.SelectedItem as VersionListEntry;
 
@@ -834,6 +848,123 @@ public partial class CalculatorListView {
 
         if (_viewModel.OpenCalculatorCommand.CanExecute(null))
             _viewModel.OpenCalculatorCommand.Execute(null);
+    }
+
+
+    private async void UpdateAllCachesButton_Click(object sender, RoutedEventArgs e) {
+        if (_isUpdatingCache)
+            return;
+
+        var calculators = _viewModel.Calculators
+            .Where(calculator => File.Exists(calculator.FilePath))
+            .ToList();
+
+        if (calculators.Count == 0) {
+            MessageBox.Show(
+                Window.GetWindow(this)!,
+                "Nie znaleziono kalkulatorów do aktualizacji.",
+                "Aktualizacja cache",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        _isUpdatingCache = true;
+        _cacheUpdateCancellation = new CancellationTokenSource();
+
+        UpdateAllCachesButton.IsEnabled = false;
+        CancelCacheUpdateButton.IsEnabled = true;
+        CacheUpdatePanel.Visibility = Visibility.Visible;
+        CacheUpdateOverallProgressBar.Value = 0.0;
+        CacheUpdateStageProgressBar.Value = 0.0;
+        CacheUpdateOverallPercentText.Text = "0%";
+        CacheUpdateStagePercentText.Text = "0%";
+        CacheUpdateTitleText.Text = "Aktualizacja pamięci kalkulatorów";
+        CacheUpdateCalculatorText.Text = $"Przygotowanie · 0 z {calculators.Count}";
+        CacheUpdateStageText.Text = "Sprawdzanie cache";
+        CacheUpdateDetailText.Text = "Sprawdzanie, które kalkulatory wymagają aktualizacji…";
+        CacheUpdateStatsText.Text = "Zaktualizowano: 0 · Aktualne: 0 · Błędy: 0";
+
+        var cacheUpdateService = new CalculatorCacheUpdateService(
+            new SheetLayoutCacheService(),
+            App.ExcelWorker);
+
+        var progress = new Progress<CalculatorCacheUpdateProgress>(UpdateCacheProgressUi);
+
+        try {
+            var result = await cacheUpdateService.UpdateAllAsync(
+                calculators,
+                progress,
+                _cacheUpdateCancellation.Token);
+
+            CacheUpdateOverallProgressBar.Value = result.WasCancelled
+                ? CacheUpdateOverallProgressBar.Value
+                : 100.0;
+            CacheUpdateOverallPercentText.Text = result.WasCancelled
+                ? $"{CacheUpdateOverallProgressBar.Value:0}%"
+                : "100%";
+            CacheUpdateStageProgressBar.Value = 100.0;
+            CacheUpdateStagePercentText.Text = "100%";
+            CacheUpdateCalculatorText.Text = result.WasCancelled
+                ? "Aktualizacja anulowana"
+                : "Aktualizacja zakończona";
+            CacheUpdateStageText.Text = result.WasCancelled
+                ? "Anulowano"
+                : "Gotowe";
+            CacheUpdateDetailText.Text = result.WasCancelled
+                ? "Przerwano po zakończeniu bieżącej operacji."
+                : "Cache wszystkich wymagających aktualizacji kalkulatorów jest gotowy.";
+            CacheUpdateStatsText.Text =
+                $"Zaktualizowano: {result.UpdatedCount} · " +
+                $"Aktualne: {result.SkippedCount} · " +
+                $"Błędy: {result.FailedCount}";
+        }
+        catch (Exception exception) {
+            CacheUpdateStageText.Text = "Błąd aktualizacji";
+            CacheUpdateDetailText.Text = FormatExceptionMessage(
+                "Nie udało się zakończyć aktualizacji cache",
+                exception);
+        }
+        finally {
+            _isUpdatingCache = false;
+            UpdateAllCachesButton.IsEnabled = true;
+            CancelCacheUpdateButton.IsEnabled = false;
+            _cacheUpdateCancellation?.Dispose();
+            _cacheUpdateCancellation = null;
+        }
+    }
+
+    private void CancelCacheUpdateButton_Click(object sender, RoutedEventArgs e) {
+        if (!_isUpdatingCache || _cacheUpdateCancellation == null)
+            return;
+
+        CancelCacheUpdateButton.IsEnabled = false;
+        CacheUpdateStageText.Text = "Anulowanie…";
+        CacheUpdateDetailText.Text =
+            "Aktualizacja zostanie zatrzymana po zakończeniu bieżącej operacji na pliku.";
+        _cacheUpdateCancellation.Cancel();
+    }
+
+    private void CloseCacheUpdatePanelButton_Click(object sender, RoutedEventArgs e) {
+        if (_isUpdatingCache)
+            return;
+
+        CacheUpdatePanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void UpdateCacheProgressUi(CalculatorCacheUpdateProgress progress) {
+        CacheUpdateOverallProgressBar.Value = progress.OverallPercentage;
+        CacheUpdateStageProgressBar.Value = progress.StagePercentage;
+        CacheUpdateOverallPercentText.Text = $"{progress.OverallPercentage:0}%";
+        CacheUpdateStagePercentText.Text = $"{progress.StagePercentage:0}%";
+        CacheUpdateCalculatorText.Text =
+            $"{progress.CalculatorName} · {progress.CurrentIndex} z {progress.TotalCount}";
+        CacheUpdateStageText.Text = progress.Stage;
+        CacheUpdateDetailText.Text = progress.Detail;
+        CacheUpdateStatsText.Text =
+            $"Zaktualizowano: {progress.UpdatedCount} · " +
+            $"Aktualne: {progress.SkippedCount} · " +
+            $"Błędy: {progress.FailedCount}";
     }
 
     private static string? GetStringProperty(object source, string propertyName) {
