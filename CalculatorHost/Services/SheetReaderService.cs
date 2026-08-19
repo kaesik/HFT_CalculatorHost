@@ -196,11 +196,13 @@ public class SheetReaderService {
                     cellModel.Row - model.FirstRow + 1,
                     cellModel.Column - model.FirstColumn + 1);
 
+                var valueChanged = !AreEquivalentCellValues(cellModel.RawValue, rawValue);
+
                 cellModel.RawValue = rawValue;
 
                 if (!HasBulkContent(rawValue))
                     cellModel.DisplayText = string.Empty;
-                else {
+                else if (valueChanged || string.IsNullOrEmpty(cellModel.DisplayText)) {
                     dynamic? cell = null;
 
                     try {
@@ -244,6 +246,33 @@ public class SheetReaderService {
             ReleaseComObject(cells);
             ReleaseComObject(worksheet);
         }
+    }
+
+    private static bool AreEquivalentCellValues(object? previousValue, object? currentValue) {
+        if (ReferenceEquals(previousValue, currentValue))
+            return true;
+
+        if (previousValue == null || currentValue == null)
+            return false;
+
+        if (previousValue.Equals(currentValue))
+            return true;
+
+        // Excel COM can return the same numeric value using different CLR numeric types.
+        if (previousValue is IConvertible && currentValue is IConvertible)
+            try {
+                var previousNumber = Convert.ToDouble(previousValue, CultureInfo.InvariantCulture);
+                var currentNumber = Convert.ToDouble(currentValue, CultureInfo.InvariantCulture);
+                return previousNumber.Equals(currentNumber);
+            }
+            catch {
+                // At least one value is not numeric; compare its invariant text below.
+            }
+
+        return string.Equals(
+            Convert.ToString(previousValue, CultureInfo.InvariantCulture),
+            Convert.ToString(currentValue, CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
     }
 
     private static ReadBounds GetReadBounds(
@@ -2688,6 +2717,19 @@ public class SheetReaderService {
     }
 
     private static void ReleaseComObject(object? comObject) {
+        if (comObject == null)
+            return;
+
+        try {
+            if (Marshal.IsComObject(comObject))
+                Marshal.FinalReleaseComObject(comObject);
+        }
+        catch (InvalidComObjectException) {
+            // The RCW was already released through another reference.
+        }
+        catch (COMException) {
+            // Excel may already be shutting down.
+        }
     }
 
     private sealed record LinkedCellPosition(

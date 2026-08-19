@@ -351,14 +351,6 @@
                                          Height="10"
                                          Foreground="{DynamicResource AccentColorBrush}"
                                          Background="{DynamicResource ControlBgBrush}" />
-
-                            <TextBlock Text="Górny pasek pokazuje cały proces, dolny — postęp aktualnego etapu."
-                                       FontFamily="Segoe UI Variable, Segoe UI"
-                                       FontSize="10"
-                                       Foreground="{DynamicResource TextTertiaryBrush}"
-                                       TextAlignment="Center"
-                                       TextWrapping="Wrap"
-                                       Margin="0,18,0,0" />
                         </StackPanel>
                     </Border>
                 </Border>

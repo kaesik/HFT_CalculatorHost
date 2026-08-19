@@ -21,7 +21,17 @@ public partial class App {
     }
 
     protected override void OnExit(ExitEventArgs e) {
-        ExcelWorker.Dispose();
-        base.OnExit(e);
+        try {
+            ExcelWorker
+                .InvokeAsync(ExcelSessionService.DisposeAllActiveSessions)
+                .Wait(TimeSpan.FromSeconds(20));
+        }
+        catch {
+            // Best-effort cleanup during application shutdown.
+        }
+        finally {
+            ExcelWorker?.Dispose();
+            base.OnExit(e);
+        }
     }
 }

@@ -59,12 +59,12 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
     private string _loadingDetail = string.Empty;
     private string _loadingStage = string.Empty;
     private string _loadingTitle = "Ładowanie kalkulatora";
-    private double _overallProgress;
-    private double _stageProgress;
     private ObservableCollection<MacroButtonConfig> _macroButtons = [];
     private string _operationPerformanceMessage = string.Empty;
+    private double _overallProgress;
     private string _performanceMessage = string.Empty;
     private SheetModel? _sheetModel;
+    private double _stageProgress;
     private string _statusMessage = string.Empty;
 
     public CalculatorViewModel(
@@ -352,7 +352,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                     _sheetReader.RefreshCellValues(
                         _excelSession,
                         cachedModel,
-                        progress: sheetProgress));
+                        SheetRefreshMode.ValuesOnly,
+                        sheetProgress));
             else
                 model = await _worker.InvokeAsync(() =>
                     _sheetReader.ReadFirstSheet(
@@ -458,8 +459,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 StatusMessage = await ApplyVersionFileAsync(
                     startupVersionPath,
                     loadingTitle,
-                    98.0,
-                    100.0);
+                    98.0);
             }
             else {
                 SetLoadingProgress(
@@ -565,10 +565,7 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
 
         try {
             StatusMessage = await ApplyVersionFileAsync(
-                versionFilePath,
-                "Wczytywanie wersji",
-                0.0,
-                100.0);
+                versionFilePath);
         }
         catch (Exception exception) {
             if (!_disposed)
@@ -647,7 +644,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             _sheetReader.RefreshCellValues(
                 _excelSession,
                 currentModel,
-                progress: refreshProgress));
+                SheetRefreshMode.ValuesOnly,
+                refreshProgress));
         refreshStopwatch.Stop();
 
         if (_disposed)
@@ -723,8 +721,6 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 _excelSession.ExecuteWithEventsEnabled(() => {
                     WritePendingValues(pendingValues);
                     _excelSession.Recalculate();
-                    WritePendingValues(pendingValues);
-                    _excelSession.Recalculate();
                 });
             });
             recalculationStopwatch.Stop();
@@ -747,7 +743,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 _sheetReader.RefreshCellValues(
                     _excelSession,
                     currentModel,
-                    progress: refreshProgress));
+                    SheetRefreshMode.ValuesOnly,
+                    refreshProgress));
             refreshStopwatch.Stop();
 
             if (_disposed) return;
@@ -841,7 +838,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                     _sheetReader.RefreshCellValues(
                         _excelSession,
                         currentModel,
-                        progress: refreshProgress));
+                        SheetRefreshMode.ValuesOnly,
+                        refreshProgress));
                 refreshOperationName = "Odświeżenie wartości";
             }
 

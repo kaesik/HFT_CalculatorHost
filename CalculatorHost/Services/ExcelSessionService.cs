@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
@@ -7,35 +8,70 @@ namespace CalculatorHost.Services;
 public class ExcelSessionService : IDisposable {
     private const int ExcelCalculationManual = -4135;
 
+    private static readonly object ActiveSessionsLock = new();
+    private static readonly HashSet<ExcelSessionService> ActiveSessions = [];
+
     private dynamic? _application;
     private bool _disposed;
     private dynamic? _workbook;
+
+    public ExcelSessionService() {
+        lock (ActiveSessionsLock) {
+            ActiveSessions.Add(this);
+        }
+    }
 
     public void Dispose() {
         if (_disposed) return;
 
         _disposed = true;
-        CloseWorkbookInternal();
 
-        if (_application != null)
+        try {
+            CloseWorkbookInternal();
+
+            if (_application != null)
+                try {
+                    _application.Quit();
+                }
+                catch {
+                    // The COM reference still has to be released when Quit fails.
+                }
+                finally {
+                    ReleaseComObject(_application);
+                    _application = null;
+                }
+
+            // Release any short-lived RCWs which became unreachable during shutdown.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        finally {
+            lock (ActiveSessionsLock) {
+                ActiveSessions.Remove(this);
+            }
+        }
+    }
+
+    public static void DisposeAllActiveSessions() {
+        ExcelSessionService[] sessions;
+
+        lock (ActiveSessionsLock) {
+            sessions = [.. ActiveSessions];
+        }
+
+        foreach (var session in sessions)
             try {
-                _application.Quit();
+                session.Dispose();
             }
             catch {
-                // ignored
+                // Best-effort shutdown. Continue closing the remaining Excel instances.
             }
-            finally {
-                ReleaseComObject(_application);
-                _application = null;
-            }
-
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
     }
 
     public void OpenSession(string workbookPath) {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         EnsureApplicationCreated();
         CloseWorkbookInternal();
         OpenWorkbookInternal(workbookPath);
@@ -1697,5 +1733,18 @@ public class ExcelSessionService : IDisposable {
     }
 
     private static void ReleaseComObject(object? comObject) {
+        if (comObject == null)
+            return;
+
+        try {
+            if (Marshal.IsComObject(comObject))
+                Marshal.FinalReleaseComObject(comObject);
+        }
+        catch (InvalidComObjectException) {
+            // The RCW was already released through another reference.
+        }
+        catch (COMException) {
+            // Excel may already be shutting down; no further action is needed.
+        }
     }
 }

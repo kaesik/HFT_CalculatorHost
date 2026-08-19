@@ -9,7 +9,7 @@ using CalculatorHost.Models;
 namespace CalculatorHost.Services;
 
 public class SheetLayoutCacheService {
-    private const int CurrentCacheVersion = 1;
+    private const int CurrentCacheVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new() {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -228,7 +228,9 @@ public class SheetLayoutCacheService {
             DefaultRowHeight = model.DefaultRowHeight,
             ColumnWidths = new Dictionary<int, double>(model.ColumnWidths),
             RowHeights = new Dictionary<int, double>(model.RowHeights),
-            Cells = model.Cells.Select(ConvertToCachedCell).ToList()
+            Cells = model.Cells.Select(ConvertToCachedCell).ToList(),
+            Images = model.Images.Select(ConvertToCachedImage).ToList(),
+            MacroButtons = model.MacroButtons.Select(ConvertToCachedMacroButton).ToList()
         };
     }
 
@@ -254,7 +256,47 @@ public class SheetLayoutCacheService {
             BorderColor = ConvertColorToUnsignedInteger(cell.BorderColor),
             IsInput = cell.IsInput,
             InputType = cell.InputType,
-            DropdownValues = [.. cell.DropdownValues]
+            DropdownValues = [.. cell.DropdownValues],
+            InputTargetRow = cell.InputTargetRow,
+            InputTargetColumn = cell.InputTargetColumn,
+            InputTargetSheetName = cell.InputTargetSheetName,
+            InputTargetFormulaText = cell.InputTargetFormulaText,
+            DropdownControlName = cell.DropdownControlName,
+            IsActiveXDropdown = cell.IsActiveXDropdown,
+            DropdownWritesSelectedIndex = cell.DropdownWritesSelectedIndex,
+            DropdownSelectedIndex = cell.DropdownSelectedIndex,
+            DropdownListSourceReference = cell.DropdownListSourceReference,
+            DropdownLinkedCellReference = cell.DropdownLinkedCellReference
+        };
+    }
+
+    private static CachedSheetImageModel ConvertToCachedImage(SheetImageModel image) {
+        return new CachedSheetImageModel {
+            Name = image.Name,
+            ImageBytes = image.ImageBytes,
+            Left = image.Left,
+            Top = image.Top,
+            Width = image.Width,
+            Height = image.Height,
+            ZIndex = image.ZIndex
+        };
+    }
+
+    private static CachedMacroButtonModel ConvertToCachedMacroButton(MacroButtonConfig button) {
+        return new CachedMacroButtonModel {
+            Label = button.Label,
+            MacroName = button.MacroName,
+            Tooltip = button.Tooltip,
+            RefreshLayoutAfterRun = button.RefreshLayoutAfterRun,
+            IsSheetButton = button.IsSheetButton,
+            IsActiveXCommandButton = button.IsActiveXCommandButton,
+            ShapeName = button.ShapeName,
+            OleObjectName = button.OleObjectName,
+            Left = button.Left,
+            Top = button.Top,
+            Width = button.Width,
+            Height = button.Height,
+            ZIndex = button.ZIndex
         };
     }
 
@@ -269,7 +311,9 @@ public class SheetLayoutCacheService {
             DefaultRowHeight = cachedSheet.DefaultRowHeight,
             ColumnWidths = new Dictionary<int, double>(cachedSheet.ColumnWidths),
             RowHeights = new Dictionary<int, double>(cachedSheet.RowHeights),
-            Cells = cachedSheet.Cells.Select(ConvertToCellModel).ToList()
+            Cells = cachedSheet.Cells.Select(ConvertToCellModel).ToList(),
+            Images = cachedSheet.Images.Select(ConvertToSheetImageModel).ToList(),
+            MacroButtons = cachedSheet.MacroButtons.Select(ConvertToMacroButtonConfig).ToList()
         };
     }
 
@@ -295,7 +339,47 @@ public class SheetLayoutCacheService {
             BorderColor = ConvertUnsignedIntegerToColor(cachedCell.BorderColor),
             IsInput = cachedCell.IsInput,
             InputType = cachedCell.InputType,
-            DropdownValues = [.. cachedCell.DropdownValues]
+            DropdownValues = [.. cachedCell.DropdownValues],
+            InputTargetRow = cachedCell.InputTargetRow,
+            InputTargetColumn = cachedCell.InputTargetColumn,
+            InputTargetSheetName = cachedCell.InputTargetSheetName,
+            InputTargetFormulaText = cachedCell.InputTargetFormulaText,
+            DropdownControlName = cachedCell.DropdownControlName,
+            IsActiveXDropdown = cachedCell.IsActiveXDropdown,
+            DropdownWritesSelectedIndex = cachedCell.DropdownWritesSelectedIndex,
+            DropdownSelectedIndex = cachedCell.DropdownSelectedIndex,
+            DropdownListSourceReference = cachedCell.DropdownListSourceReference,
+            DropdownLinkedCellReference = cachedCell.DropdownLinkedCellReference
+        };
+    }
+
+    private static SheetImageModel ConvertToSheetImageModel(CachedSheetImageModel image) {
+        return new SheetImageModel {
+            Name = image.Name,
+            ImageBytes = image.ImageBytes,
+            Left = image.Left,
+            Top = image.Top,
+            Width = image.Width,
+            Height = image.Height,
+            ZIndex = image.ZIndex
+        };
+    }
+
+    private static MacroButtonConfig ConvertToMacroButtonConfig(CachedMacroButtonModel button) {
+        return new MacroButtonConfig {
+            Label = button.Label,
+            MacroName = button.MacroName,
+            Tooltip = button.Tooltip,
+            RefreshLayoutAfterRun = button.RefreshLayoutAfterRun,
+            IsSheetButton = button.IsSheetButton,
+            IsActiveXCommandButton = button.IsActiveXCommandButton,
+            ShapeName = button.ShapeName,
+            OleObjectName = button.OleObjectName,
+            Left = button.Left,
+            Top = button.Top,
+            Width = button.Width,
+            Height = button.Height,
+            ZIndex = button.ZIndex
         };
     }
 
@@ -327,6 +411,8 @@ public sealed class SheetLayoutCacheDocument {
 public sealed class CachedSheetModel {
     public string SheetName { get; init; } = string.Empty;
     public List<CachedCellModel> Cells { get; init; } = [];
+    public List<CachedSheetImageModel> Images { get; init; } = [];
+    public List<CachedMacroButtonModel> MacroButtons { get; init; } = [];
     public Dictionary<int, double> ColumnWidths { get; init; } = new();
     public Dictionary<int, double> RowHeights { get; init; } = new();
     public int FirstRow { get; init; } = 1;
@@ -359,4 +445,40 @@ public sealed class CachedCellModel {
     public bool IsInput { get; init; }
     public CellInputType InputType { get; init; }
     public List<string> DropdownValues { get; init; } = [];
+    public int? InputTargetRow { get; init; }
+    public int? InputTargetColumn { get; init; }
+    public string? InputTargetSheetName { get; init; }
+    public string? InputTargetFormulaText { get; init; }
+    public string? DropdownControlName { get; init; }
+    public bool IsActiveXDropdown { get; init; }
+    public bool DropdownWritesSelectedIndex { get; init; }
+    public int? DropdownSelectedIndex { get; init; }
+    public string? DropdownListSourceReference { get; init; }
+    public string? DropdownLinkedCellReference { get; init; }
+}
+
+public sealed class CachedSheetImageModel {
+    public string Name { get; init; } = string.Empty;
+    public byte[] ImageBytes { get; init; } = [];
+    public double Left { get; init; }
+    public double Top { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public int ZIndex { get; init; }
+}
+
+public sealed class CachedMacroButtonModel {
+    public string Label { get; init; } = string.Empty;
+    public string MacroName { get; init; } = string.Empty;
+    public string Tooltip { get; init; } = string.Empty;
+    public bool RefreshLayoutAfterRun { get; init; }
+    public bool IsSheetButton { get; init; }
+    public bool IsActiveXCommandButton { get; init; }
+    public string ShapeName { get; init; } = string.Empty;
+    public string OleObjectName { get; init; } = string.Empty;
+    public double Left { get; init; }
+    public double Top { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public int ZIndex { get; init; }
 }
