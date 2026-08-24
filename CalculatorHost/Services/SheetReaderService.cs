@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -85,6 +86,10 @@ public class SheetReaderService {
     private const int SecondInputRoleColorRow = 3;
     private const int OutputRoleColorRow = 4;
 
+    private readonly Dictionary<string, TimeSpan> _lastReadTimings = new(StringComparer.Ordinal);
+
+    public IReadOnlyDictionary<string, TimeSpan> LastReadTimings => _lastReadTimings;
+
     public SheetModel ReadFirstSheet(
         ExcelSessionService session,
         IProgress<SheetReadProgress>? progress = null) {
@@ -92,6 +97,10 @@ public class SheetReaderService {
         dynamic? usedRange = null;
         dynamic? usedRows = null;
         dynamic? usedColumns = null;
+        var totalStopwatch = Stopwatch.StartNew();
+        var stageStopwatch = Stopwatch.StartNew();
+
+        _lastReadTimings.Clear();
 
         try {
             ReportProgress(progress, "Analiza arkusza", 0.0, 0.0, "Ustalanie zakresu danych…");
@@ -131,18 +140,48 @@ public class SheetReaderService {
                 100.0,
                 $"Zakres: {rowCount} w. × {columnCount} kol.");
 
+            RecordTiming("Analiza arkusza", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
             ReportProgress(progress, "Rozpoznawanie pól", 3.0, 0.0, "Odczyt kolorów pól…");
             var colorRoles = ReadColorRoles((object)worksheet);
             ReportProgress(progress, "Rozpoznawanie pól", 5.0, 100.0, "Gotowe");
 
-            ReadColumnWidths((object)worksheet, model, progress);
-            ReadRowHeights((object)worksheet, model, progress);
-            ReadCells((object)worksheet, model, colorRoles, progress);
-            ReadDropdownElements((object)worksheet, model, colorRoles, progress);
-            ReadImages((object)worksheet, model, progress);
-            ReadMacroButtons((object)worksheet, model, progress);
+            RecordTiming("Kolory ról", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
 
-            ReportProgress(progress, "Gotowe", 100.0, 100.0, "Arkusz został wczytany.");
+            ReadColumnWidths((object)worksheet, model, progress);
+            RecordTiming("Szerokości kolumn", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
+            ReadRowHeights((object)worksheet, model, progress);
+            RecordTiming("Wysokości wierszy", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
+            ReadCells((object)worksheet, model, colorRoles, progress);
+            RecordTiming("Komórki", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
+            ReadDropdownElements((object)worksheet, model, colorRoles, progress);
+            RecordTiming("Listy rozwijane", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
+            ReadImages((object)worksheet, model, progress);
+            RecordTiming("Obrazy", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
+
+            ReadMacroButtons((object)worksheet, model, progress);
+            RecordTiming("Przyciski makr", stageStopwatch.Elapsed);
+
+            totalStopwatch.Stop();
+            RecordTiming("Całość", totalStopwatch.Elapsed);
+
+            ReportProgress(
+                progress,
+                "Gotowe",
+                100.0,
+                100.0,
+                $"Arkusz został wczytany w {FormatElapsed(totalStopwatch.Elapsed)}.");
 
             return model;
         }
@@ -161,6 +200,10 @@ public class SheetReaderService {
         IProgress<SheetReadProgress>? progress = null) {
         dynamic? worksheet = null;
         dynamic? cells = null;
+        var totalStopwatch = Stopwatch.StartNew();
+        var stageStopwatch = Stopwatch.StartNew();
+
+        _lastReadTimings.Clear();
 
         try {
             worksheet = session.GetFirstWorksheet();
@@ -189,6 +232,7 @@ public class SheetReaderService {
                     : $"Komórka 0 z {refreshableCells.Count}");
 
             var processedCells = 0;
+            var lastReportedPercentage = 0;
 
             foreach (var cellModel in refreshableCells) {
                 var rawValue = GetRangeValue(
@@ -216,29 +260,57 @@ public class SheetReaderService {
 
                 processedCells++;
 
-                ReportStageProgress(
-                    progress,
-                    "Odświeżanie wartości",
-                    0.0,
-                    valuesOverallEnd,
-                    processedCells,
-                    refreshableCells.Count,
-                    $"Komórka {processedCells} z {refreshableCells.Count}");
+                if (ShouldReportProgress(
+                        processedCells,
+                        refreshableCells.Count,
+                        ref lastReportedPercentage))
+                    ReportStageProgress(
+                        progress,
+                        "Odświeżanie wartości",
+                        0.0,
+                        valuesOverallEnd,
+                        processedCells,
+                        refreshableCells.Count,
+                        $"Komórka {processedCells} z {refreshableCells.Count}");
             }
+
+            RecordTiming("Odświeżanie wartości", stageStopwatch.Elapsed);
+            stageStopwatch.Restart();
 
             if (refreshMode == SheetRefreshMode.Full) {
                 ReportProgress(progress, "Rozpoznawanie pól", 75.0, 0.0, "Odczyt kolorów pól…");
                 var colorRoles = ReadColorRoles((object)worksheet);
                 ReportProgress(progress, "Rozpoznawanie pól", 78.0, 100.0, "Gotowe");
 
+                RecordTiming("Kolory ról", stageStopwatch.Elapsed);
+                stageStopwatch.Restart();
+
                 ReadDropdownElements((object)worksheet, model, colorRoles, progress, 78.0, 88.0);
+                RecordTiming("Listy rozwijane", stageStopwatch.Elapsed);
+                stageStopwatch.Restart();
+
                 ReadImages((object)worksheet, model, progress, 88.0, 95.0);
+                RecordTiming("Obrazy", stageStopwatch.Elapsed);
+                stageStopwatch.Restart();
+
                 ReadMacroButtons((object)worksheet, model, progress, 95.0);
+                RecordTiming("Przyciski makr", stageStopwatch.Elapsed);
             }
-            else if (refreshMode == SheetRefreshMode.ValuesAndImages)
+            else if (refreshMode == SheetRefreshMode.ValuesAndImages) {
                 ReadImages((object)worksheet, model, progress, 80.0, 100.0);
 
-            ReportProgress(progress, "Gotowe", 100.0, 100.0, "Wartości arkusza zostały odświeżone.");
+                RecordTiming("Obrazy", stageStopwatch.Elapsed);
+            }
+
+            totalStopwatch.Stop();
+            RecordTiming("Całość", totalStopwatch.Elapsed);
+
+            ReportProgress(
+                progress,
+                "Gotowe",
+                100.0,
+                100.0,
+                $"Wartości arkusza zostały odświeżone w {FormatElapsed(totalStopwatch.Elapsed)}.");
 
             return model;
         }
@@ -445,6 +517,8 @@ public class SheetReaderService {
                 totalColumns,
                 totalColumns == 0 ? "Brak kolumn" : $"Kolumna 0 z {totalColumns}");
 
+            var lastReportedPercentage = 0;
+
             for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
                 dynamic? columnRange = null;
 
@@ -466,14 +540,15 @@ public class SheetReaderService {
                 }
 
                 var processedColumns = column - model.FirstColumn + 1;
-                ReportStageProgress(
-                    progress,
-                    "Odczyt szerokości kolumn",
-                    5.0,
-                    10.0,
-                    processedColumns,
-                    totalColumns,
-                    $"Kolumna {processedColumns} z {totalColumns}");
+                if (ShouldReportProgress(processedColumns, totalColumns, ref lastReportedPercentage))
+                    ReportStageProgress(
+                        progress,
+                        "Odczyt szerokości kolumn",
+                        5.0,
+                        10.0,
+                        processedColumns,
+                        totalColumns,
+                        $"Kolumna {processedColumns} z {totalColumns}");
             }
         }
         finally {
@@ -501,6 +576,8 @@ public class SheetReaderService {
                 totalRows,
                 totalRows == 0 ? "Brak wierszy" : $"Wiersz 0 z {totalRows}");
 
+            var lastReportedPercentage = 0;
+
             for (var row = model.FirstRow; row <= model.MaxRow; row++) {
                 dynamic? rowRange = null;
 
@@ -522,14 +599,15 @@ public class SheetReaderService {
                 }
 
                 var processedRows = row - model.FirstRow + 1;
-                ReportStageProgress(
-                    progress,
-                    "Odczyt wysokości wierszy",
-                    10.0,
-                    15.0,
-                    processedRows,
-                    totalRows,
-                    $"Wiersz {processedRows} z {totalRows}");
+                if (ShouldReportProgress(processedRows, totalRows, ref lastReportedPercentage))
+                    ReportStageProgress(
+                        progress,
+                        "Odczyt wysokości wierszy",
+                        10.0,
+                        15.0,
+                        processedRows,
+                        totalRows,
+                        $"Wiersz {processedRows} z {totalRows}");
             }
         }
         finally {
@@ -549,6 +627,10 @@ public class SheetReaderService {
         try {
             cells = worksheet.Cells;
             var values = ReadRangeValues(worksheetObject, (object)cells, model);
+            var conditionalFormattingCells = ReadConditionalFormattingCells(
+                worksheetObject,
+                (object)cells,
+                model);
             var totalRows = Math.Max(model.MaxRow - model.FirstRow + 1, 0);
 
             ReportStageProgress(
@@ -560,24 +642,30 @@ public class SheetReaderService {
                 totalRows,
                 totalRows == 0 ? "Brak komórek" : $"Wiersz 0 z {totalRows}");
 
+            var lastReportedPercentage = 0;
+
             for (var row = model.FirstRow; row <= model.MaxRow; row++) {
                 var processedRows = row - model.FirstRow + 1;
 
                 if (model.RowHeights.TryGetValue(row, out var rowHeight) && rowHeight == 0.0) {
-                    ReportStageProgress(
-                        progress,
-                        "Odczyt komórek",
-                        15.0,
-                        85.0,
-                        processedRows,
-                        totalRows,
-                        $"Wiersz {processedRows} z {totalRows}");
+                    if (ShouldReportProgress(processedRows, totalRows, ref lastReportedPercentage))
+                        ReportStageProgress(
+                            progress,
+                            "Odczyt komórek",
+                            15.0,
+                            85.0,
+                            processedRows,
+                            totalRows,
+                            $"Wiersz {processedRows} z {totalRows}");
                     continue;
                 }
 
                 for (var column = model.FirstColumn; column <= model.MaxColumn; column++) {
                     if (model.ColumnWidths.TryGetValue(column, out var columnWidth) && columnWidth == 0.0)
                         continue;
+
+                    var includeDisplayFormatBorders = conditionalFormattingCells == null ||
+                                                      conditionalFormattingCells.Contains((row, column));
 
                     if (mergedSlaveCells.Contains((row, column))) {
                         dynamic? slaveCell = null;
@@ -588,7 +676,8 @@ public class SheetReaderService {
                             var slaveCellModel = ReadMergedSlaveCell(
                                 (object)slaveCell,
                                 row,
-                                column);
+                                column,
+                                includeDisplayFormatBorders);
 
                             model.Cells.Add(slaveCellModel);
                         }
@@ -604,13 +693,13 @@ public class SheetReaderService {
                         row - model.FirstRow + 1,
                         column - model.FirstColumn + 1);
 
+                    if (IsRoleColorDefinitionCell(row, column))
+                        continue;
+
                     dynamic? cell = null;
 
                     try {
                         cell = cells[row, column];
-
-                        if (IsRoleColorDefinitionCell(row, column))
-                            continue;
 
                         var cellModel = ReadRenderableCell(
                             (object)cell,
@@ -618,7 +707,8 @@ public class SheetReaderService {
                             column,
                             worksheetObject,
                             rawValue,
-                            colorRoles);
+                            colorRoles,
+                            includeDisplayFormatBorders);
 
                         if (cellModel == null)
                             continue;
@@ -631,14 +721,15 @@ public class SheetReaderService {
                     }
                 }
 
-                ReportStageProgress(
-                    progress,
-                    "Odczyt komórek",
-                    15.0,
-                    85.0,
-                    processedRows,
-                    totalRows,
-                    $"Wiersz {processedRows} z {totalRows}");
+                if (ShouldReportProgress(processedRows, totalRows, ref lastReportedPercentage))
+                    ReportStageProgress(
+                        progress,
+                        "Odczyt komórek",
+                        15.0,
+                        85.0,
+                        processedRows,
+                        totalRows,
+                        $"Wiersz {processedRows} z {totalRows}");
             }
         }
         finally {
@@ -652,7 +743,8 @@ public class SheetReaderService {
         int column,
         object worksheetObject,
         object? rawValue,
-        CellColorRoles colorRoles) {
+        CellColorRoles colorRoles,
+        bool includeDisplayFormatBorders) {
         var model = new CellModel {
             Row = row,
             Column = column,
@@ -664,8 +756,7 @@ public class SheetReaderService {
 
         var hasBackground = ReadBackground(cellObject, model, colorRoles);
 
-        ReadMerge(cellObject, model);
-        ReadBorders(cellObject, model);
+        ReadMergeAndBorders(cellObject, model, includeDisplayFormatBorders);
 
         if (!HasContent(model) && !hasBackground && !HasVisibleBorder(model))
             return null;
@@ -680,14 +771,15 @@ public class SheetReaderService {
     private CellModel ReadMergedSlaveCell(
         object cellObject,
         int row,
-        int column) {
+        int column,
+        bool includeDisplayFormatBorders) {
         var model = new CellModel {
             Row = row,
             Column = column,
             IsMergedSlave = true
         };
 
-        ReadBorders(cellObject, model, false);
+        ReadBorders(cellObject, model, null, includeDisplayFormatBorders);
 
         return model;
     }
@@ -733,6 +825,90 @@ public class SheetReaderService {
             return range.Value2;
         }
         finally {
+            ReleaseComObject(range);
+            ReleaseComObject(lastCell);
+            ReleaseComObject(firstCell);
+        }
+    }
+
+    private static HashSet<(int Row, int Column)>? ReadConditionalFormattingCells(
+        object worksheetObject,
+        object cellsObject,
+        SheetModel model) {
+        dynamic worksheet = worksheetObject;
+        dynamic cells = cellsObject;
+        dynamic? firstCell = null;
+        dynamic? lastCell = null;
+        dynamic? range = null;
+        dynamic? formatConditions = null;
+
+        try {
+            firstCell = cells[model.FirstRow, model.FirstColumn];
+            lastCell = cells[model.MaxRow, model.MaxColumn];
+            range = worksheet.Range[firstCell, lastCell];
+            formatConditions = range.FormatConditions;
+
+            var result = new HashSet<(int Row, int Column)>();
+            var conditionCount = Convert.ToInt32(formatConditions.Count);
+
+            for (var conditionIndex = 1; conditionIndex <= conditionCount; conditionIndex++) {
+                dynamic? condition = null;
+                dynamic? appliesTo = null;
+                dynamic? areas = null;
+
+                try {
+                    condition = formatConditions.Item(conditionIndex);
+                    appliesTo = condition.AppliesTo;
+                    areas = appliesTo.Areas;
+
+                    var areaCount = Convert.ToInt32(areas.Count);
+
+                    for (var areaIndex = 1; areaIndex <= areaCount; areaIndex++) {
+                        dynamic? area = null;
+                        dynamic? areaRows = null;
+                        dynamic? areaColumns = null;
+
+                        try {
+                            area = areas.Item(areaIndex);
+                            areaRows = area.Rows;
+                            areaColumns = area.Columns;
+
+                            var areaFirstRow = Convert.ToInt32(area.Row);
+                            var areaFirstColumn = Convert.ToInt32(area.Column);
+                            var areaLastRow = areaFirstRow + Convert.ToInt32(areaRows.Count) - 1;
+                            var areaLastColumn = areaFirstColumn + Convert.ToInt32(areaColumns.Count) - 1;
+
+                            var firstRow = Math.Max(areaFirstRow, model.FirstRow);
+                            var lastRow = Math.Min(areaLastRow, model.MaxRow);
+                            var firstColumn = Math.Max(areaFirstColumn, model.FirstColumn);
+                            var lastColumn = Math.Min(areaLastColumn, model.MaxColumn);
+
+                            for (var row = firstRow; row <= lastRow; row++)
+                            for (var column = firstColumn; column <= lastColumn; column++)
+                                result.Add((row, column));
+                        }
+                        finally {
+                            ReleaseComObject(areaColumns);
+                            ReleaseComObject(areaRows);
+                            ReleaseComObject(area);
+                        }
+                    }
+                }
+                finally {
+                    ReleaseComObject(areas);
+                    ReleaseComObject(appliesTo);
+                    ReleaseComObject(condition);
+                }
+            }
+
+            return result;
+        }
+        catch {
+            // Unknown means "use DisplayFormat everywhere" so visual fidelity is preserved.
+            return null;
+        }
+        finally {
+            ReleaseComObject(formatConditions);
             ReleaseComObject(range);
             ReleaseComObject(lastCell);
             ReleaseComObject(firstCell);
@@ -876,12 +1052,52 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadBorders(object cellObject, CellModel model, bool includeMergeAreaBorders = true) {
+    private void ReadMergeAndBorders(
+        object cellObject,
+        CellModel model,
+        bool includeDisplayFormatBorders) {
         dynamic cell = cellObject;
+        dynamic? mergeArea = null;
+        dynamic? rows = null;
+        dynamic? columns = null;
+
+        try {
+            if (Convert.ToBoolean(cell.MergeCells)) {
+                mergeArea = cell.MergeArea;
+                rows = mergeArea.Rows;
+                columns = mergeArea.Columns;
+
+                model.RowSpan = Convert.ToInt32(rows.Count);
+                model.ColSpan = Convert.ToInt32(columns.Count);
+            }
+
+            ReadBorders(
+                cellObject,
+                model,
+                mergeArea == null ? null : (object)mergeArea,
+                includeDisplayFormatBorders);
+        }
+        catch {
+            // A malformed merge must not prevent the cell itself from being rendered.
+            ReadBorders(cellObject, model, null, includeDisplayFormatBorders);
+        }
+        finally {
+            ReleaseComObject(columns);
+            ReleaseComObject(rows);
+            ReleaseComObject(mergeArea);
+        }
+    }
+
+    private void ReadBorders(
+        object cellObject,
+        CellModel model,
+        object? mergeAreaObject,
+        bool includeDisplayFormatBorders) {
+        dynamic cell = cellObject;
+        dynamic? mergeArea = mergeAreaObject;
         dynamic? borders = null;
         dynamic? displayFormat = null;
         dynamic? displayBorders = null;
-        dynamic? mergeArea = null;
         dynamic? mergeBorders = null;
         dynamic? mergeDisplayFormat = null;
         dynamic? mergeDisplayBorders = null;
@@ -899,26 +1115,26 @@ public class SheetReaderService {
             ReleaseComObject(borders);
         }
 
-        try {
-            displayFormat = cell.DisplayFormat;
-            displayBorders = displayFormat.Borders;
-            ApplyBordersFromCollection(displayBorders, model, ref dominantColor);
-        }
-        catch {
-            // ignored
-        }
-        finally {
-            ReleaseComObject(displayBorders);
-            ReleaseComObject(displayFormat);
-        }
+        if (includeDisplayFormatBorders)
+            try {
+                displayFormat = cell.DisplayFormat;
+                displayBorders = displayFormat.Borders;
+                ApplyBordersFromCollection(displayBorders, model, ref dominantColor);
+            }
+            catch {
+                // ignored
+            }
+            finally {
+                ReleaseComObject(displayBorders);
+                ReleaseComObject(displayFormat);
+            }
 
         try {
-            if (!includeMergeAreaBorders || !Convert.ToBoolean(cell.MergeCells)) {
+            if (mergeArea == null) {
                 model.BorderColor = dominantColor;
                 return;
             }
 
-            mergeArea = cell.MergeArea;
             mergeBorders = mergeArea.Borders;
             ApplyBordersFromCollection(mergeBorders, model, ref dominantColor);
         }
@@ -929,21 +1145,19 @@ public class SheetReaderService {
             ReleaseComObject(mergeBorders);
         }
 
-        try {
-            if (mergeArea != null) {
+        if (includeDisplayFormatBorders)
+            try {
                 mergeDisplayFormat = mergeArea.DisplayFormat;
                 mergeDisplayBorders = mergeDisplayFormat.Borders;
                 ApplyBordersFromCollection(mergeDisplayBorders, model, ref dominantColor);
             }
-        }
-        catch {
-            // ignored
-        }
-        finally {
-            ReleaseComObject(mergeDisplayBorders);
-            ReleaseComObject(mergeDisplayFormat);
-            ReleaseComObject(mergeArea);
-        }
+            catch {
+                // ignored
+            }
+            finally {
+                ReleaseComObject(mergeDisplayBorders);
+                ReleaseComObject(mergeDisplayFormat);
+            }
 
         model.BorderColor = dominantColor;
     }
@@ -1014,33 +1228,6 @@ public class SheetReaderService {
         }
         finally {
             ReleaseComObject(border);
-        }
-    }
-
-    private static void ReadMerge(object cellObject, CellModel model) {
-        dynamic cell = cellObject;
-        dynamic? mergeArea = null;
-        dynamic? rows = null;
-        dynamic? columns = null;
-
-        try {
-            if (!Convert.ToBoolean(cell.MergeCells))
-                return;
-
-            mergeArea = cell.MergeArea;
-            rows = mergeArea.Rows;
-            columns = mergeArea.Columns;
-
-            model.RowSpan = Convert.ToInt32(rows.Count);
-            model.ColSpan = Convert.ToInt32(columns.Count);
-        }
-        catch {
-            // ignored
-        }
-        finally {
-            ReleaseComObject(columns);
-            ReleaseComObject(rows);
-            ReleaseComObject(mergeArea);
         }
     }
 
@@ -1197,7 +1384,8 @@ public class SheetReaderService {
     }
 
     private void ReadDataValidationDropdowns(object worksheetObject, SheetModel model, CellColorRoles colorRoles) {
-        ReadRenderedInputValidations(worksheetObject, model);
+        var processedValidationCells = new HashSet<(int Row, int Column)>();
+        ReadRenderedInputValidations(worksheetObject, model, processedValidationCells);
 
         dynamic worksheet = worksheetObject;
         dynamic? validationCells = null;
@@ -1219,6 +1407,9 @@ public class SheetReaderService {
                     var column = Convert.ToInt32(cell.Column);
 
                     if (!IsInsideRenderedSheet(row, column, model))
+                        continue;
+
+                    if (!processedValidationCells.Add((row, column)))
                         continue;
 
                     if (!IsDropdownRoleCell((object)cell, colorRoles))
@@ -1247,7 +1438,10 @@ public class SheetReaderService {
         }
     }
 
-    private void ReadRenderedInputValidations(object worksheetObject, SheetModel model) {
+    private void ReadRenderedInputValidations(
+        object worksheetObject,
+        SheetModel model,
+        ISet<(int Row, int Column)> processedValidationCells) {
         dynamic worksheet = worksheetObject;
         dynamic? cells = null;
 
@@ -1261,7 +1455,8 @@ public class SheetReaderService {
 
                 try {
                     cell = cells[cellModel.Row, cellModel.Column];
-                    ReadValidation((object)cell, cellModel, worksheetObject);
+                    if (ReadValidation((object)cell, cellModel, worksheetObject))
+                        processedValidationCells.Add((cellModel.Row, cellModel.Column));
                 }
                 catch {
                     // ignored
@@ -1481,15 +1676,14 @@ public class SheetReaderService {
         ReadBackground(cellObject, cellModel, colorRoles);
         ReadFont(cellObject, cellModel);
         ReadAlignment(cellObject, cellModel);
-        ReadBorders(cellObject, cellModel);
-        ReadMerge(cellObject, cellModel);
+        ReadMergeAndBorders(cellObject, cellModel, true);
 
         model.Cells.Add(cellModel);
 
         return cellModel;
     }
 
-    private void ReadValidation(
+    private bool ReadValidation(
         object cellObject,
         CellModel model,
         object worksheetObject) {
@@ -1500,7 +1694,7 @@ public class SheetReaderService {
             validation = cell.Validation;
 
             if (Convert.ToInt32(validation.Type) != ExcelValidationTypeList)
-                return;
+                return false;
 
             var formulas = new List<string>();
 
@@ -1520,11 +1714,13 @@ public class SheetReaderService {
                     continue;
 
                 ApplyDropdownValues(model, values, null, null, false);
-                return;
+                return true;
             }
+
+            return true;
         }
         catch {
-            // ignored
+            return false;
         }
         finally {
             ReleaseComObject(validation);
@@ -2675,6 +2871,35 @@ public class SheetReaderService {
             ExcelBorderWeightThick => 3.0,
             _ => 1.0
         };
+    }
+
+    private void RecordTiming(string stage, TimeSpan elapsed) {
+        _lastReadTimings[stage] = elapsed;
+        Debug.WriteLine($"[SheetReaderService] {stage}: {FormatElapsed(elapsed)}");
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed) {
+        return elapsed.TotalSeconds >= 1.0
+            ? $"{elapsed.TotalSeconds:0.00} s"
+            : $"{elapsed.TotalMilliseconds:0} ms";
+    }
+
+    private static bool ShouldReportProgress(
+        int current,
+        int total,
+        ref int lastReportedPercentage) {
+        if (total <= 0)
+            return false;
+
+        var percentage = current >= total
+            ? 100
+            : (int)Math.Floor(current * 100.0 / total);
+
+        if (percentage <= lastReportedPercentage && current < total)
+            return false;
+
+        lastReportedPercentage = percentage;
+        return true;
     }
 
     private static void ReportStageProgress(

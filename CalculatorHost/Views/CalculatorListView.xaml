@@ -3,9 +3,126 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:CalculatorHost.Views">
 
+    <UserControl.Resources>
+        <Style x:Key="CalculatorSegmentStyle" TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable, Segoe UI" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="SegmentBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="7"
+                                Padding="10,7">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="SegmentBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="SegmentBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource AccentColorBrush}" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CalculatorSortChipStyle"
+               TargetType="RadioButton"
+               BasedOn="{StaticResource CalculatorSegmentStyle}">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Background" Value="{DynamicResource ControlBgBrush}" />
+        </Style>
+
+        <Style x:Key="CalculatorFavoriteButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="FavoriteBorder"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="16">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="FavoriteBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ModernCalculatorListItem" TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="11,10" />
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="CalculatorCard"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CalculatorCard"
+                                        Property="Background"
+                                        Value="{DynamicResource SurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="CalculatorCard"
+                                        Property="Background"
+                                        Value="{DynamicResource CardBgBrush}" />
+                                <Setter TargetName="CalculatorCard"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource AccentColorBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Background="{DynamicResource WindowBgBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="340" MinWidth="240" MaxWidth="480" />
+            <ColumnDefinition Width="380" MinWidth="320" MaxWidth="480" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
@@ -17,21 +134,146 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <!-- Header -->
-                <StackPanel Grid.Row="0" Margin="20,20,20,12">
-                    <TextBlock Text="DOSTĘPNE KALKULATORY"
+                <StackPanel Grid.Row="0" Margin="20,20,20,14">
+                    <TextBlock Text="Kalkulatory"
                                FontFamily="Segoe UI Variable, Segoe UI"
-                               FontSize="10" FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextTertiaryBrush}"
-                               Margin="0,0,0,6" />
+                               FontSize="22"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}" />
                 </StackPanel>
 
-                <!-- Folder Missing Warning -->
+                <!-- Modern search, filters and quick sorting -->
                 <Border Grid.Row="1"
+                        BorderBrush="{DynamicResource DividerColorBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="16,0,16,14">
+                    <StackPanel>
+                        <Border Height="42"
+                                Background="{DynamicResource CardBgBrush}"
+                                BorderBrush="{DynamicResource BorderColorBrush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="40" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="36" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Column="0"
+                                           Text="&#xE721;"
+                                           FontFamily="Segoe MDL2 Assets"
+                                           FontSize="15"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+
+                                <Grid Grid.Column="1">
+                                    <TextBox x:Name="SearchTextBox"
+                                             Padding="0,10,0,8"
+                                             Background="Transparent"
+                                             Foreground="{DynamicResource TextPrimaryBrush}"
+                                             BorderThickness="0"
+                                             FontSize="12"
+                                             ToolTip="Szukaj kalkulatora po nazwie"
+                                             TextChanged="SearchTextBox_TextChanged" />
+
+                                    <TextBlock x:Name="SearchPlaceholderText"
+                                               Text="Szukaj kalkulatora..."
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextTertiaryBrush}"
+                                               VerticalAlignment="Center"
+                                               IsHitTestVisible="False" />
+                                </Grid>
+
+                                <Button x:Name="ClearSearchButton"
+                                        Grid.Column="2"
+                                        Style="{StaticResource CalculatorFavoriteButtonStyle}"
+                                        Width="28"
+                                        Height="28"
+                                        Content="&#xE711;"
+                                        FontSize="11"
+                                        ToolTip="Wyczyść wyszukiwanie"
+                                        Visibility="Collapsed"
+                                        Click="ClearSearchButton_Click" />
+                            </Grid>
+                        </Border>
+
+                        <Border Background="{DynamicResource ControlBgBrush}"
+                                CornerRadius="9"
+                                Padding="3"
+                                Margin="0,0,0,12">
+                            <UniformGrid Rows="1" Columns="3">
+                                <RadioButton x:Name="AllCalculatorsFilterButton"
+                                             GroupName="CalculatorFilters"
+                                             Style="{StaticResource CalculatorSegmentStyle}"
+                                             Tag="Wszystkie"
+                                             Content="Wszystkie"
+                                             Checked="CalculatorFilterButton_Checked" />
+                                <RadioButton x:Name="FavoriteCalculatorsFilterButton"
+                                             GroupName="CalculatorFilters"
+                                             Style="{StaticResource CalculatorSegmentStyle}"
+                                             Tag="Ulubione"
+                                             Content="★  Ulubione"
+                                             Checked="CalculatorFilterButton_Checked" />
+                                <RadioButton x:Name="RecentCalculatorsFilterButton"
+                                             GroupName="CalculatorFilters"
+                                             Style="{StaticResource CalculatorSegmentStyle}"
+                                             Tag="Ostatnie"
+                                             Content="Ostatnie"
+                                             Checked="CalculatorFilterButton_Checked" />
+                            </UniformGrid>
+                        </Border>
+
+                        <Grid Margin="2,0,2,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="10" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Column="0"
+                                       Text="Sortuj"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextTertiaryBrush}"
+                                       VerticalAlignment="Center" />
+
+                            <UniformGrid Grid.Column="2" Rows="1" Columns="3">
+                                <RadioButton x:Name="NameSortButton"
+                                             GroupName="CalculatorSort"
+                                             Style="{StaticResource CalculatorSortChipStyle}"
+                                             Tag="Nazwa A-Z"
+                                             Content="A–Z  Nazwa"
+                                             Margin="0,0,4,0"
+                                             Checked="CalculatorSortButton_Checked" />
+                                <RadioButton x:Name="ModifiedSortButton"
+                                             GroupName="CalculatorSort"
+                                             Style="{StaticResource CalculatorSortChipStyle}"
+                                             Tag="Ostatnio zmienione"
+                                             Content="Edycja"
+                                             Margin="0,0,4,0"
+                                             Checked="CalculatorSortButton_Checked" />
+                                <RadioButton x:Name="LastUsedSortButton"
+                                             GroupName="CalculatorSort"
+                                             Style="{StaticResource CalculatorSortChipStyle}"
+                                             Tag="Ostatnio używane"
+                                             Content="Używane"
+                                             Checked="CalculatorSortButton_Checked" />
+                            </UniformGrid>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Folder Missing Warning -->
+                <Border Grid.Row="2"
                         Visibility="{Binding IsFolderMissing, Converter={StaticResource BoolToVisibilityConverter}}"
                         Margin="16,8">
                     <StackPanel>
@@ -58,52 +300,94 @@
 
                 <!-- Calculator List -->
                 <ListBox x:Name="CalculatorList"
-                         Grid.Row="1"
-                         ItemContainerStyle="{StaticResource CalculatorListItem}"
+                         Grid.Row="2"
+                         ItemContainerStyle="{StaticResource ModernCalculatorListItem}"
                          Background="Transparent"
                          BorderThickness="0"
-                         Padding="12,4"
+                         Padding="12,6"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          SelectionChanged="CalculatorList_SelectionChanged"
                          MouseDoubleClick="CalculatorList_MouseDoubleClick"
                          KeyDown="CalculatorList_KeyDown"
                          Visibility="{Binding IsFolderMissing, Converter={StaticResource InverseBoolToVisibilityConverter}}">
+                    <ListBox.GroupStyle>
+                        <GroupStyle>
+                            <GroupStyle.HeaderTemplate>
+                                <DataTemplate>
+                                    <Border Margin="6,13,6,5"
+                                            Padding="2,0,2,3">
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontSize="10"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}" />
+                                    </Border>
+                                </DataTemplate>
+                            </GroupStyle.HeaderTemplate>
+                        </GroupStyle>
+                    </ListBox.GroupStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate DataType="{x:Type views:CalculatorListEntry}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0"
+                                <Border Grid.Row="0"
+                                        Grid.RowSpan="2"
+                                        Grid.Column="0"
+                                        Width="36"
+                                        Height="36"
+                                        Margin="0,0,10,0"
+                                        Background="{DynamicResource ControlBgBrush}"
+                                        CornerRadius="9">
+                                    <TextBlock Text="&#xE8EF;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="16"
+                                               Foreground="{DynamicResource AccentColorBrush}"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center" />
+                                </Border>
+
+                                <TextBlock Grid.Row="0" Grid.Column="1"
                                            Text="{Binding DisplayName}"
                                            FontFamily="Segoe UI Variable, Segoe UI"
-                                           FontSize="13" FontWeight="SemiBold"
+                                           FontSize="14" FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}"
-                                           TextTrimming="CharacterEllipsis" />
-                                <TextBlock Grid.Row="0" Grid.Column="1"
-                                           Text="{Binding SizeText}"
-                                           FontSize="10"
-                                           Foreground="{DynamicResource TextTertiaryBrush}"
-                                           VerticalAlignment="Center" Margin="8,0,0,0" />
-                                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                           Text="{Binding ModifiedText}"
+                                           TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Bottom" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="1"
                                            FontSize="10"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
-                                           Margin="0,2,0,0" />
+                                           Margin="0,3,0,0"
+                                           TextTrimming="CharacterEllipsis">
+                                    <Run Text="{Binding ModifiedText, Mode=OneWay}" />
+                                    <Run Text="  ·  " />
+                                    <Run Text="{Binding SizeText, Mode=OneWay}" />
+                                </TextBlock>
+
+                                <Button Grid.Row="0"
+                                        Grid.RowSpan="2"
+                                        Grid.Column="2"
+                                        Style="{StaticResource CalculatorFavoriteButtonStyle}"
+                                        Margin="8,0,0,0"
+                                        Content="{Binding FavoriteIcon}"
+                                        ToolTip="{Binding FavoriteToolTip}"
+                                        Focusable="False"
+                                        Click="FavoriteButton_Click" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
 
                 <!-- Footer -->
-                <Border Grid.Row="2"
+                <Border Grid.Row="3"
                         BorderBrush="{DynamicResource DividerColorBrush}"
                         BorderThickness="0,1,0,0"
                         Padding="12,6">

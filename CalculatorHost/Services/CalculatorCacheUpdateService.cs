@@ -1,4 +1,3 @@
-using System.Threading;
 using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
@@ -22,6 +21,8 @@ public sealed record CalculatorCacheUpdateResult(
     bool WasCancelled);
 
 public sealed class CalculatorCacheUpdateService {
+    private const int MaximumAttemptsPerCalculator = 2;
+
     private readonly SheetLayoutCacheService _cacheService;
     private readonly ExcelWorker _worker;
 
@@ -39,45 +40,72 @@ public sealed class CalculatorCacheUpdateService {
         if (calculators.Count == 0)
             return new CalculatorCacheUpdateResult(0, 0, 0, false);
 
-        var session = new ExcelSessionService();
-        var reader = new SheetReaderService();
-        var workingCopy = new WorkingCopyService();
-
         var updatedCount = 0;
         var skippedCount = 0;
         var failedCount = 0;
         var wasCancelled = false;
 
-        try {
-            for (var index = 0; index < calculators.Count; index++) {
+        for (var index = 0; index < calculators.Count; index++) {
+            if (cancellationToken.IsCancellationRequested) {
+                wasCancelled = true;
+                break;
+            }
+
+            var calculator = calculators[index];
+            var currentIndex = index + 1;
+
+            if (_cacheService.IsCacheCurrent(calculator)) {
+                skippedCount++;
+
+                Report(
+                    progress,
+                    currentIndex,
+                    calculators.Count,
+                    calculator,
+                    "Cache aktualny",
+                    "Pominięto — cache nie wymaga przebudowy.",
+                    GetOverallPercentage(index, 100.0, calculators.Count),
+                    100.0,
+                    updatedCount,
+                    skippedCount,
+                    failedCount);
+
+                continue;
+            }
+
+            Exception? lastException = null;
+            var calculatorUpdated = false;
+
+            for (var attempt = 1; attempt <= MaximumAttemptsPerCalculator; attempt++) {
                 if (cancellationToken.IsCancellationRequested) {
                     wasCancelled = true;
                     break;
                 }
 
-                var calculator = calculators[index];
-                var currentIndex = index + 1;
-
-                if (_cacheService.IsCacheCurrent(calculator)) {
-                    skippedCount++;
-
-                    Report(
-                        progress,
-                        currentIndex,
-                        calculators.Count,
-                        calculator,
-                        "Cache aktualny",
-                        "Pominięto — cache nie wymaga przebudowy.",
-                        GetOverallPercentage(index, 100.0, calculators.Count),
-                        100.0,
-                        updatedCount,
-                        skippedCount,
-                        failedCount);
-
-                    continue;
-                }
+                var session = new ExcelSessionService();
+                var reader = new SheetReaderService();
+                var workingCopy = new WorkingCopyService();
+                var attemptNumber = attempt;
 
                 try {
+                    if (attempt > 1)
+                        Report(
+                            progress,
+                            currentIndex,
+                            calculators.Count,
+                            calculator,
+                            "Ponawianie",
+                            $"Pierwsza próba nie powiodła się. Uruchamianie nowej sesji Excela " +
+                            $"(próba {attempt} z {MaximumAttemptsPerCalculator})…",
+                            GetOverallPercentage(
+                                index,
+                                GetAttemptPercentage(attempt, 0.0),
+                                calculators.Count),
+                            0.0,
+                            updatedCount,
+                            skippedCount,
+                            failedCount);
+
                     Report(
                         progress,
                         currentIndex,
@@ -85,7 +113,10 @@ public sealed class CalculatorCacheUpdateService {
                         calculator,
                         "Przygotowanie pliku",
                         "Tworzenie kopii roboczej…",
-                        GetOverallPercentage(index, 2.0, calculators.Count),
+                        GetOverallPercentage(
+                            index,
+                            GetAttemptPercentage(attempt, 2.0),
+                            calculators.Count),
                         0.0,
                         updatedCount,
                         skippedCount,
@@ -100,7 +131,10 @@ public sealed class CalculatorCacheUpdateService {
                         calculator,
                         "Uruchamianie Excela",
                         "Otwieranie skoroszytu…",
-                        GetOverallPercentage(index, 8.0, calculators.Count),
+                        GetOverallPercentage(
+                            index,
+                            GetAttemptPercentage(attempt, 8.0),
+                            calculators.Count),
                         0.0,
                         updatedCount,
                         skippedCount,
@@ -115,7 +149,10 @@ public sealed class CalculatorCacheUpdateService {
                         calculator,
                         "Uruchamianie Excela",
                         "Skoroszyt otwarty.",
-                        GetOverallPercentage(index, 15.0, calculators.Count),
+                        GetOverallPercentage(
+                            index,
+                            GetAttemptPercentage(attempt, 15.0),
+                            calculators.Count),
                         100.0,
                         updatedCount,
                         skippedCount,
@@ -132,7 +169,10 @@ public sealed class CalculatorCacheUpdateService {
                             calculator,
                             sheetProgressValue.Stage,
                             sheetProgressValue.Detail,
-                            GetOverallPercentage(index, fileProgress, calculators.Count),
+                            GetOverallPercentage(
+                                index,
+                                GetAttemptPercentage(attemptNumber, fileProgress),
+                                calculators.Count),
                             sheetProgressValue.StagePercentage,
                             updatedCount,
                             skippedCount,
@@ -154,7 +194,10 @@ public sealed class CalculatorCacheUpdateService {
                         calculator,
                         "Zapisywanie cache",
                         "Zapisywanie nowego układu…",
-                        GetOverallPercentage(index, 92.0, calculators.Count),
+                        GetOverallPercentage(
+                            index,
+                            GetAttemptPercentage(attempt, 92.0),
+                            calculators.Count),
                         0.0,
                         updatedCount,
                         skippedCount,
@@ -164,6 +207,7 @@ public sealed class CalculatorCacheUpdateService {
                         throw new InvalidOperationException("Nie udało się zapisać cache kalkulatora.");
 
                     updatedCount++;
+                    calculatorUpdated = true;
 
                     Report(
                         progress,
@@ -179,44 +223,47 @@ public sealed class CalculatorCacheUpdateService {
                         failedCount);
                 }
                 catch (Exception exception) {
-                    failedCount++;
-
-                    Report(
-                        progress,
-                        currentIndex,
-                        calculators.Count,
-                        calculator,
-                        "Błąd",
-                        GetExceptionMessage(exception),
-                        GetOverallPercentage(index, 100.0, calculators.Count),
-                        100.0,
-                        updatedCount,
-                        skippedCount,
-                        failedCount);
+                    lastException = exception;
                 }
                 finally {
                     try {
-                        await _worker.InvokeAsync(session.CloseWorkbook);
+                        // Dispose closes the workbook, quits this Excel instance and
+                        // releases all session-level COM references before the next file.
+                        await _worker.InvokeAsync(session.Dispose);
                     }
                     catch {
                         // Best-effort cleanup.
                     }
 
-                    workingCopy.CleanCurrentSession();
+                    workingCopy.Dispose();
                 }
-            }
-        }
-        finally {
-            workingCopy.CleanCurrentSession();
 
-            try {
-                await _worker.InvokeAsync(session.Dispose);
-            }
-            catch {
-                // Best-effort cleanup.
+                if (calculatorUpdated || wasCancelled)
+                    break;
+
+                if (attempt < MaximumAttemptsPerCalculator)
+                    continue;
+
+                failedCount++;
+
+                Report(
+                    progress,
+                    currentIndex,
+                    calculators.Count,
+                    calculator,
+                    "Błąd",
+                    lastException == null
+                        ? "Nieznany błąd podczas aktualizacji cache."
+                        : GetExceptionMessage(lastException),
+                    GetOverallPercentage(index, 100.0, calculators.Count),
+                    100.0,
+                    updatedCount,
+                    skippedCount,
+                    failedCount);
             }
 
-            workingCopy.Dispose();
+            if (wasCancelled)
+                break;
         }
 
         return new CalculatorCacheUpdateResult(
@@ -224,6 +271,16 @@ public sealed class CalculatorCacheUpdateService {
             skippedCount,
             failedCount,
             wasCancelled || cancellationToken.IsCancellationRequested);
+    }
+
+    private static double GetAttemptPercentage(int attempt, double attemptPercentage) {
+        var attemptSize = 100.0 / MaximumAttemptsPerCalculator;
+
+        return Math.Clamp(
+            (attempt - 1) * attemptSize +
+            Math.Clamp(attemptPercentage, 0.0, 100.0) * attemptSize / 100.0,
+            0.0,
+            100.0);
     }
 
     private static double GetOverallPercentage(
@@ -269,7 +326,7 @@ public sealed class CalculatorCacheUpdateService {
 
     private static string GetExceptionMessage(Exception exception) {
         var messages = new List<string>();
-        Exception? currentException = exception;
+        var currentException = exception;
 
         while (currentException != null) {
             if (!string.IsNullOrWhiteSpace(currentException.Message))

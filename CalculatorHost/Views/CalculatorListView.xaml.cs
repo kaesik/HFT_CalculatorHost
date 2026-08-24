@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
@@ -6,6 +7,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -17,10 +19,13 @@ using Microsoft.Win32;
 namespace CalculatorHost.Views;
 
 public partial class CalculatorListView {
+    private readonly UserPreferencesService _userPreferences = new();
     private readonly MainViewModel _viewModel;
     private CancellationTokenSource? _cacheUpdateCancellation;
-    private List<CalculatorListEntry> _calculatorListItems = new();
+    private ICollectionView? _calculatorCollectionView;
+    private ObservableCollection<CalculatorListEntry> _calculatorListItems = [];
     private VersionListEntry? _currentlyRenamedVersion;
+    private bool _isInitializingListTools = true;
     private bool _isRefreshingCalculatorList;
     private bool _isSubscribed;
     private bool _isUpdatingCache;
@@ -30,6 +35,7 @@ public partial class CalculatorListView {
         _viewModel = viewModel;
         DataContext = viewModel;
 
+        InitializeCalculatorListTools();
         RefreshCalculatorListItems();
         UpdateCount();
         UpdateSelectedCalculatorPanel();
@@ -58,6 +64,201 @@ public partial class CalculatorListView {
         _isSubscribed = false;
     }
 
+    private void InitializeCalculatorListTools() {
+        _isInitializingListTools = true;
+        try {
+            var filterMode = CalculatorListOptions.IsValidFilterMode(_userPreferences.FilterMode)
+                ? _userPreferences.FilterMode
+                : CalculatorListOptions.FilterAll;
+
+            AllCalculatorsFilterButton.IsChecked = filterMode == CalculatorListOptions.FilterAll;
+            FavoriteCalculatorsFilterButton.IsChecked = filterMode == CalculatorListOptions.FilterFavorites;
+            RecentCalculatorsFilterButton.IsChecked = filterMode == CalculatorListOptions.FilterRecent;
+
+            var sortMode = _userPreferences.SortMode;
+            NameSortButton.IsChecked = sortMode is CalculatorListOptions.SortNameAscending
+                or CalculatorListOptions.SortNameDescending
+                or CalculatorListOptions.SortFavoritesFirst;
+            ModifiedSortButton.IsChecked = sortMode == CalculatorListOptions.SortModifiedNewest;
+            LastUsedSortButton.IsChecked = sortMode == CalculatorListOptions.SortRecentlyOpened;
+
+            if (NameSortButton.IsChecked != true &&
+                ModifiedSortButton.IsChecked != true &&
+                LastUsedSortButton.IsChecked != true)
+                NameSortButton.IsChecked = true;
+        }
+        finally {
+            _isInitializingListTools = false;
+        }
+    }
+
+    private bool FilterCalculator(object item) {
+        if (item is not CalculatorListEntry calculator)
+            return false;
+
+        switch (GetSelectedFilterMode()) {
+            case CalculatorListOptions.FilterFavorites when !calculator.IsFavorite:
+                return false;
+            case CalculatorListOptions.FilterRecent when !calculator.LastOpenedUtc.HasValue:
+                return false;
+        }
+
+        var searchText = SearchTextBox.Text?.Trim();
+        return string.IsNullOrWhiteSpace(searchText) ||
+               calculator.DisplayName.Contains(searchText, StringComparison.CurrentCultureIgnoreCase) ||
+               calculator.FileName.Contains(searchText, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private void ApplySortAndGrouping() {
+        if (_calculatorCollectionView == null)
+            return;
+
+        using (_calculatorCollectionView.DeferRefresh()) {
+            _calculatorCollectionView.SortDescriptions.Clear();
+            _calculatorCollectionView.GroupDescriptions.Clear();
+
+            var filterMode = GetSelectedFilterMode();
+            var sortMode = GetSelectedSortMode();
+
+            switch (sortMode) {
+                case CalculatorListOptions.SortModifiedNewest:
+                    _calculatorCollectionView.GroupDescriptions.Add(
+                        new PropertyGroupDescription(nameof(CalculatorListEntry.ModifiedGroup)));
+                    AddSort(nameof(CalculatorListEntry.LastModified), ListSortDirection.Descending);
+                    AddSort(nameof(CalculatorListEntry.DisplayName), ListSortDirection.Ascending);
+                    break;
+                case CalculatorListOptions.SortRecentlyOpened:
+                    _calculatorCollectionView.GroupDescriptions.Add(
+                        new PropertyGroupDescription(nameof(CalculatorListEntry.LastOpenedGroup)));
+                    AddSort(nameof(CalculatorListEntry.LastOpenedUtc), ListSortDirection.Descending);
+                    AddSort(nameof(CalculatorListEntry.DisplayName), ListSortDirection.Ascending);
+                    break;
+                default:
+                    if (filterMode == CalculatorListOptions.FilterAll) {
+                        _calculatorCollectionView.GroupDescriptions.Add(
+                            new PropertyGroupDescription(nameof(CalculatorListEntry.AllNameGroup)));
+                        AddSort(nameof(CalculatorListEntry.IsFavorite), ListSortDirection.Descending);
+                        AddSort(nameof(CalculatorListEntry.FirstLetterGroup), ListSortDirection.Ascending);
+                    }
+
+                    AddSort(nameof(CalculatorListEntry.DisplayName), ListSortDirection.Ascending);
+                    break;
+            }
+        }
+
+        UpdateCount();
+    }
+
+    private void AddSort(string propertyName, ListSortDirection direction) {
+        if (_calculatorCollectionView == null)
+            return;
+
+        if (_calculatorCollectionView.SortDescriptions.Any(sort =>
+                string.Equals(sort.PropertyName, propertyName, StringComparison.Ordinal)))
+            return;
+
+        _calculatorCollectionView.SortDescriptions.Add(new SortDescription(propertyName, direction));
+    }
+
+    private void RefreshCalculatorFilter() {
+        _calculatorCollectionView?.Refresh();
+
+        if (_viewModel.SelectedCalculator != null &&
+            _calculatorListItems.All(item =>
+                !string.Equals(item.FilePath, _viewModel.SelectedCalculator.FilePath,
+                    StringComparison.OrdinalIgnoreCase) || !FilterCalculator(item)))
+            _viewModel.SelectedCalculator = null;
+
+        UpdateCount();
+    }
+
+    private void SaveListOptions() {
+        if (_isInitializingListTools)
+            return;
+
+        _userPreferences.SetListOptions(
+            GetSelectedSortMode(),
+            GetSelectedFilterMode());
+    }
+
+    private string GetSelectedFilterMode() {
+        if (FavoriteCalculatorsFilterButton.IsChecked == true)
+            return CalculatorListOptions.FilterFavorites;
+
+        if (RecentCalculatorsFilterButton.IsChecked == true)
+            return CalculatorListOptions.FilterRecent;
+
+        return CalculatorListOptions.FilterAll;
+    }
+
+    private string GetSelectedSortMode() {
+        if (ModifiedSortButton.IsChecked == true)
+            return CalculatorListOptions.SortModifiedNewest;
+
+        if (LastUsedSortButton.IsChecked == true)
+            return CalculatorListOptions.SortRecentlyOpened;
+
+        return CalculatorListOptions.SortNameAscending;
+    }
+
+    private void SearchTextBox_TextChanged(object sender, TextChangedEventArgs e) {
+        if (SearchPlaceholderText != null)
+            SearchPlaceholderText.Visibility = string.IsNullOrEmpty(SearchTextBox.Text)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+        if (ClearSearchButton != null)
+            ClearSearchButton.Visibility = string.IsNullOrEmpty(SearchTextBox.Text)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+
+        if (_isInitializingListTools)
+            return;
+
+        RefreshCalculatorFilter();
+    }
+
+    private void ClearSearchButton_Click(object sender, RoutedEventArgs e) {
+        SearchTextBox.Clear();
+        SearchTextBox.Focus();
+    }
+
+    private void CalculatorFilterButton_Checked(object sender, RoutedEventArgs e) {
+        if (_isInitializingListTools)
+            return;
+
+        if (sender == RecentCalculatorsFilterButton && LastUsedSortButton.IsChecked != true) {
+            _isInitializingListTools = true;
+            LastUsedSortButton.IsChecked = true;
+            _isInitializingListTools = false;
+        }
+
+        ApplySortAndGrouping();
+        RefreshCalculatorFilter();
+        SaveListOptions();
+    }
+
+    private void CalculatorSortButton_Checked(object sender, RoutedEventArgs e) {
+        if (_isInitializingListTools)
+            return;
+
+        ApplySortAndGrouping();
+        SaveListOptions();
+    }
+
+    private void FavoriteButton_Click(object sender, RoutedEventArgs e) {
+        if ((sender as FrameworkElement)?.DataContext is not CalculatorListEntry calculator)
+            return;
+
+        var newFavoriteState = !calculator.IsFavorite;
+        _userPreferences.SetFavorite(calculator.FilePath, newFavoriteState);
+        calculator.SetFavorite(newFavoriteState);
+
+        ApplySortAndGrouping();
+        RefreshCalculatorFilter();
+        e.Handled = true;
+    }
+
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e) {
         switch (e.PropertyName) {
             case nameof(MainViewModel.Calculators):
@@ -73,23 +274,35 @@ public partial class CalculatorListView {
     }
 
     private void UpdateCount() {
-        var count = _viewModel.Calculators.Count;
-        CountText.Text = count switch {
+        var totalCount = _viewModel.Calculators.Count;
+        var visibleCount = _calculatorCollectionView?.Cast<object>().Count() ?? totalCount;
+        var visibleText = visibleCount switch {
             0 => "Brak kalkulatorów",
             1 => "1 kalkulator",
-            _ => $"{count} kalkulatorów"
+            _ => $"{visibleCount} kalkulatorów"
         };
+
+        CountText.Text = visibleCount == totalCount
+            ? visibleText
+            : $"{visibleText} z {totalCount}";
     }
 
     private void RefreshCalculatorListItems() {
-        _calculatorListItems = new List<CalculatorListEntry>();
+        _calculatorListItems = [];
 
         foreach (var calculator in _viewModel.Calculators)
-            _calculatorListItems.Add(new CalculatorListEntry(calculator));
+            _calculatorListItems.Add(new CalculatorListEntry(
+                calculator,
+                _userPreferences.IsFavorite(calculator.FilePath),
+                _userPreferences.GetLastOpenedUtc(calculator.FilePath)));
+
+        _calculatorCollectionView = CollectionViewSource.GetDefaultView(_calculatorListItems);
+        _calculatorCollectionView.Filter = FilterCalculator;
+        ApplySortAndGrouping();
 
         _isRefreshingCalculatorList = true;
         try {
-            CalculatorList.ItemsSource = _calculatorListItems;
+            CalculatorList.ItemsSource = _calculatorCollectionView;
             SelectCurrentCalculatorInList();
         }
         finally {
@@ -826,6 +1039,8 @@ public partial class CalculatorListView {
         else
             CalculatorStartupVersionSelection.Clear(calculator.FilePath);
 
+        MarkCalculatorOpened(calculator);
+
         if (_viewModel.OpenCalculatorCommand.CanExecute(null))
             _viewModel.OpenCalculatorCommand.Execute(null);
     }
@@ -846,8 +1061,18 @@ public partial class CalculatorListView {
         else
             CalculatorStartupVersionSelection.Set(calculator.FilePath, selectedVersion.FilePath);
 
+        MarkCalculatorOpened(calculator);
+
         if (_viewModel.OpenCalculatorCommand.CanExecute(null))
             _viewModel.OpenCalculatorCommand.Execute(null);
+    }
+
+    private void MarkCalculatorOpened(CalculatorInfo calculator) {
+        var openedAt = _userPreferences.MarkOpened(calculator.FilePath);
+        var listEntry = _calculatorListItems.FirstOrDefault(item =>
+            string.Equals(item.FilePath, calculator.FilePath, StringComparison.OrdinalIgnoreCase));
+
+        listEntry?.SetLastOpenedUtc(openedAt);
     }
 
 
@@ -1029,17 +1254,83 @@ public partial class CalculatorListView {
     }
 }
 
-public sealed class CalculatorListEntry {
-    internal CalculatorListEntry(CalculatorInfo calculator) {
+public sealed class CalculatorListEntry : INotifyPropertyChanged {
+    internal CalculatorListEntry(CalculatorInfo calculator, bool isFavorite, DateTime? lastOpenedUtc) {
         Calculator = calculator;
+        IsFavorite = isFavorite;
+        LastOpenedUtc = lastOpenedUtc;
     }
 
     internal CalculatorInfo Calculator { get; }
     internal string FilePath => Calculator.FilePath;
 
+    public string FileName => Calculator.FileName;
     public string DisplayName => Calculator.DisplayName;
     public string ModifiedText => CalculatorListView.FormatLastModified(Calculator.FilePath);
     public string SizeText => CalculatorListView.FormatFileSize(Calculator.FilePath);
+    public DateTime LastModified => Calculator.LastModified;
+    public bool IsFavorite { get; private set; }
+
+    public DateTime? LastOpenedUtc { get; private set; }
+
+    public string FavoriteIcon => IsFavorite ? "\uE735" : "\uE734";
+    public string FavoriteToolTip => IsFavorite ? "Usuń z ulubionych" : "Dodaj do ulubionych";
+    public string FavoriteGroup => IsFavorite ? "ULUBIONE" : "POZOSTAŁE";
+    public string AllNameGroup => IsFavorite ? "★  ULUBIONE" : FirstLetterGroup;
+    public string ModifiedGroup => GetActivityGroup(LastModified);
+
+    public string LastOpenedGroup => LastOpenedUtc.HasValue
+        ? GetActivityGroup(LastOpenedUtc.Value.ToLocalTime())
+        : "NIEUŻYWANE";
+
+    public string FirstLetterGroup {
+        get {
+            var firstCharacter = DisplayName.Trim().FirstOrDefault();
+            return firstCharacter == default
+                ? "#"
+                : char.ToUpper(firstCharacter, CultureInfo.CurrentCulture).ToString();
+        }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    internal void SetFavorite(bool isFavorite) {
+        if (IsFavorite == isFavorite)
+            return;
+
+        IsFavorite = isFavorite;
+        OnPropertyChanged(nameof(IsFavorite));
+        OnPropertyChanged(nameof(FavoriteIcon));
+        OnPropertyChanged(nameof(FavoriteToolTip));
+        OnPropertyChanged(nameof(FavoriteGroup));
+        OnPropertyChanged(nameof(AllNameGroup));
+    }
+
+    internal void SetLastOpenedUtc(DateTime openedAtUtc) {
+        LastOpenedUtc = openedAtUtc;
+        OnPropertyChanged(nameof(LastOpenedUtc));
+        OnPropertyChanged(nameof(LastOpenedGroup));
+    }
+
+    private static string GetActivityGroup(DateTime dateTime) {
+        var localDate = dateTime.Kind == DateTimeKind.Utc ? dateTime.ToLocalTime().Date : dateTime.Date;
+        var today = DateTime.Today;
+
+        if (localDate >= today)
+            return "DZISIAJ";
+
+        if (localDate >= today.AddDays(-6))
+            return "OSTATNIE 7 DNI";
+
+        if (localDate >= new DateTime(today.Year, today.Month, 1))
+            return "TEN MIESIĄC";
+
+        return "WCZEŚNIEJ";
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
 }
 
 public sealed class VersionListEntry : INotifyPropertyChanged {
