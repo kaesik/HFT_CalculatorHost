@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CalculatorHost.Models;
 
 public class MacroButtonConfig {
@@ -9,6 +11,19 @@ public class MacroButtonConfig {
     public bool IsActiveXCommandButton { get; set; }
     public string ShapeName { get; set; } = string.Empty;
     public string OleObjectName { get; set; } = string.Empty;
+    public string WorksheetName { get; set; } = string.Empty;
+    public string WorksheetCodeName { get; set; } = string.Empty;
+
+    [JsonIgnore] public string VbaModuleName { get; set; } = string.Empty;
+
+    [JsonIgnore] public string VbaProcedureName { get; set; } = string.Empty;
+
+    [JsonIgnore] public string VbaProcedureCode { get; set; } = string.Empty;
+
+    [JsonIgnore] public string VbaReadError { get; set; } = string.Empty;
+
+    [JsonIgnore] public bool HasVbaProcedureCode => !string.IsNullOrWhiteSpace(VbaProcedureCode);
+
     public double Left { get; set; }
     public double Top { get; set; }
     public double Width { get; set; }

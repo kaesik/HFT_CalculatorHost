@@ -410,9 +410,46 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             SetLoadingProgress(
                 loadingTitle,
                 "Wczytywanie konfiguracji makr",
-                96.0,
+                95.0,
                 100.0,
                 "Konfiguracja gotowa");
+
+            operationName = "odczytywania procedur VBA";
+            SetLoadingProgress(
+                loadingTitle,
+                "Odczytywanie procedur VBA",
+                95.0,
+                0.0,
+                "Pobieranie kodu procedur przypisanych do przycisków…");
+
+            var vbaProcedureStopwatch = Stopwatch.StartNew();
+            var allMacroButtons = model.MacroButtons
+                .Concat(buttons)
+                .Distinct()
+                .ToList();
+
+            await _worker.InvokeAsync(() =>
+                _excelSession.ReadMacroProcedureSources(allMacroButtons));
+
+            vbaProcedureStopwatch.Stop();
+
+            var readVbaProcedureCount = allMacroButtons.Count(button => button.HasVbaProcedureCode);
+            var failedVbaProcedureCount = allMacroButtons.Count(button =>
+                !string.IsNullOrWhiteSpace(button.VbaReadError));
+            UpdateMacroProcedureTooltips(allMacroButtons);
+
+            var vbaProcedureDetail = allMacroButtons.Count == 0
+                ? "Brak procedur przypisanych do przycisków"
+                : failedVbaProcedureCount == 0
+                    ? $"Odczytano {readVbaProcedureCount} z {allMacroButtons.Count} procedur"
+                    : $"Odczytano {readVbaProcedureCount} z {allMacroButtons.Count} procedur · błędy: {failedVbaProcedureCount}";
+
+            SetLoadingProgress(
+                loadingTitle,
+                "Odczytywanie procedur VBA",
+                96.0,
+                100.0,
+                vbaProcedureDetail);
 
             if (_disposed) return;
 
@@ -432,7 +469,8 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
                 $"{cacheMessage} · " +
                 $"{readMessage}" +
                 $"{cacheSaveMessage} · " +
-                $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)}");
+                $"Konfiguracja makr: {FormatDuration(macroConfigurationStopwatch.Elapsed)} · " +
+                $"Procedury VBA: {FormatDuration(vbaProcedureStopwatch.Elapsed)}");
 
             SetLoadingProgress(
                 loadingTitle,
@@ -684,6 +722,18 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
         ErrorMessage = FormatExceptionMessage(prefix, exception);
         StatusMessage = string.Empty;
         IsLoading = false;
+    }
+
+    public bool DismissError() {
+        if (_disposed || !HasError)
+            return false;
+
+        var canReturnToSheet = SheetModel != null;
+
+        ErrorMessage = string.Empty;
+        StatusMessage = string.Empty;
+
+        return canReturnToSheet;
     }
 
     public void RequestClose() {
@@ -1419,6 +1469,53 @@ public class CalculatorViewModel : INotifyPropertyChanged, IDisposable {
             NumberStyles.Float,
             CultureInfo.InvariantCulture,
             out result);
+    }
+
+    private static void UpdateMacroProcedureTooltips(IEnumerable<MacroButtonConfig> macroButtons) {
+        foreach (var button in macroButtons) {
+            var baseTooltip = RemoveVbaTooltipDetails(button.Tooltip);
+
+            if (string.IsNullOrWhiteSpace(baseTooltip))
+                baseTooltip = $"Procedura: {button.MacroName}";
+
+            if (button.HasVbaProcedureCode) {
+                var procedureReference = string.IsNullOrWhiteSpace(button.VbaModuleName)
+                    ? button.VbaProcedureName
+                    : $"{button.VbaModuleName}.{button.VbaProcedureName}";
+                var lineCount = button.VbaProcedureCode
+                    .Split(["\r\n", "\r", "\n"], StringSplitOptions.None)
+                    .Length;
+
+                button.Tooltip =
+                    $"{baseTooltip}{Environment.NewLine}Kod VBA odczytany: {procedureReference} ({lineCount} wierszy)";
+                continue;
+            }
+
+            button.Tooltip = string.IsNullOrWhiteSpace(button.VbaReadError)
+                ? baseTooltip
+                : $"{baseTooltip}{Environment.NewLine}Nie odczytano kodu VBA: {button.VbaReadError}";
+        }
+    }
+
+    private static string RemoveVbaTooltipDetails(string tooltip) {
+        if (string.IsNullOrWhiteSpace(tooltip))
+            return string.Empty;
+
+        var codeReadIndex = tooltip.IndexOf(
+            $"{Environment.NewLine}Kod VBA odczytany:",
+            StringComparison.Ordinal);
+        var codeErrorIndex = tooltip.IndexOf(
+            $"{Environment.NewLine}Nie odczytano kodu VBA:",
+            StringComparison.Ordinal);
+        var detailsIndex = codeReadIndex < 0
+            ? codeErrorIndex
+            : codeErrorIndex < 0
+                ? codeReadIndex
+                : Math.Min(codeReadIndex, codeErrorIndex);
+
+        return detailsIndex < 0
+            ? tooltip.Trim()
+            : tooltip[..detailsIndex].Trim();
     }
 
     private static string FormatExceptionMessage(string prefix, Exception exception) {

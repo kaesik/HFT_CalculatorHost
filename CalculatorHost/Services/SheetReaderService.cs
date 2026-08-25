@@ -2433,6 +2433,8 @@ public class SheetReaderService {
 
             var originLeft = Convert.ToDouble(originCell.Left) * PointsToDips;
             var originTop = Convert.ToDouble(originCell.Top) * PointsToDips;
+            var worksheetName = Convert.ToString(worksheet.Name) ?? string.Empty;
+            var worksheetCodeName = ReadWorksheetCodeName(worksheetObject);
 
             for (var index = 1; index <= shapeCount; index++) {
                 dynamic? shape = null;
@@ -2464,6 +2466,8 @@ public class SheetReaderService {
                         MacroName = macroName,
                         Tooltip = $"Uruchamia makro: {macroName}",
                         ShapeName = Convert.ToString(shape.Name) ?? string.Empty,
+                        WorksheetName = worksheetName,
+                        WorksheetCodeName = worksheetCodeName,
                         Left = left,
                         Top = top,
                         Width = width,
@@ -2508,6 +2512,8 @@ public class SheetReaderService {
 
             var originLeft = Convert.ToDouble(originCell.Left) * PointsToDips;
             var originTop = Convert.ToDouble(originCell.Top) * PointsToDips;
+            var worksheetName = Convert.ToString(worksheet.Name) ?? string.Empty;
+            var worksheetCodeName = ReadWorksheetCodeName(worksheetObject);
 
             for (var index = 1; index <= objectCount; index++) {
                 dynamic? embeddedObject = null;
@@ -2544,6 +2550,8 @@ public class SheetReaderService {
                         MacroName = name,
                         Tooltip = $"Uruchamia przycisk ActiveX: {name}",
                         OleObjectName = name,
+                        WorksheetName = worksheetName,
+                        WorksheetCodeName = worksheetCodeName,
                         Left = left,
                         Top = top,
                         Width = width,
@@ -2657,6 +2665,17 @@ public class SheetReaderService {
             var caption = Convert.ToString(control.Caption);
 
             return caption?.Trim() ?? string.Empty;
+        }
+        catch {
+            return string.Empty;
+        }
+    }
+
+    private static string ReadWorksheetCodeName(object worksheetObject) {
+        dynamic worksheet = worksheetObject;
+
+        try {
+            return Convert.ToString(worksheet.CodeName)?.Trim() ?? string.Empty;
         }
         catch {
             return string.Empty;

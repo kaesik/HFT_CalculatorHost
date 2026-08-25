@@ -389,11 +389,11 @@
                                        TextWrapping="Wrap"
                                        TextAlignment="Center"
                                        MaxWidth="380" />
-                            <Button Content="Zamknij kalkulator"
+                            <Button Content="Wróć"
                                     Style="{StaticResource MacroButton}"
                                     HorizontalAlignment="Center"
                                     Margin="0,20,0,0"
-                                    Click="BackButton_Click" />
+                                    Click="ErrorBackButton_Click" />
                         </StackPanel>
                     </Border>
                 </Border>

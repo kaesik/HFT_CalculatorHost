@@ -271,6 +271,13 @@ public partial class CalculatorView {
         _viewModel.RequestClose();
     }
 
+    private void ErrorBackButton_Click(object sender, RoutedEventArgs eventArguments) {
+        if (_viewModel.DismissError())
+            return;
+
+        _viewModel.RequestClose();
+    }
+
     private async void SaveVersionButton_Click(object sender, RoutedEventArgs eventArguments) {
         string defaultFilePath;
 

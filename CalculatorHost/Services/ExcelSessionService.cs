@@ -1,12 +1,18 @@
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using CalculatorHost.Models;
 
 namespace CalculatorHost.Services;
 
 public class ExcelSessionService : IDisposable {
     private const int ExcelCalculationManual = -4135;
+    private const int VbaStandardModuleType = 1;
+
+    private static readonly Regex VbaProcedureDeclarationRegex = new(
+        @"^\s*(?:(?:Public|Private|Friend|Static|Default)\s+)*(?<kind>Sub|Function|Property\s+(?:Get|Let|Set))\s+(?<name>[\p{L}_][\p{L}\p{Nd}_]*)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly object ActiveSessionsLock = new();
     private static readonly HashSet<ExcelSessionService> ActiveSessions = [];
@@ -1563,6 +1569,49 @@ public class ExcelSessionService : IDisposable {
         }
     }
 
+    public void ReadMacroProcedureSources(IEnumerable<MacroButtonConfig> macroButtons) {
+        if (_application == null || _workbook == null)
+            throw new InvalidOperationException("Brak aktywnej sesji programu Excel.");
+
+        ArgumentNullException.ThrowIfNull(macroButtons);
+
+        var buttons = macroButtons
+            .Where(button => button != null)
+            .Distinct()
+            .ToList();
+
+        if (buttons.Count == 0)
+            return;
+
+        foreach (var button in buttons)
+            ResetVbaProcedureSource(button);
+
+        dynamic? vbaProject = null;
+        dynamic? vbaComponents = null;
+
+        try {
+            vbaProject = _workbook.VBProject;
+            vbaComponents = vbaProject.VBComponents;
+
+            var modules = ReadVbaModules((object)vbaComponents);
+
+            if (modules.Count == 0) {
+                SetVbaReadError(buttons, "Projekt VBA nie zawiera modułów możliwych do odczytania.");
+                return;
+            }
+
+            foreach (var button in buttons)
+                ReadVbaProcedureSource(button, modules);
+        }
+        catch (Exception exception) {
+            SetVbaReadError(buttons, CreateVbaProjectReadError(exception));
+        }
+        finally {
+            ReleaseComObject(vbaComponents);
+            ReleaseComObject(vbaProject);
+        }
+    }
+
     public void RunMacroButton(MacroButtonConfig config) {
         if (config == null)
             throw new InvalidOperationException("Nie podano konfiguracji przycisku makra.");
@@ -1574,6 +1623,238 @@ public class ExcelSessionService : IDisposable {
         }
 
         RunMacro(config.MacroName);
+    }
+
+    private static List<VbaModuleSnapshot> ReadVbaModules(object vbaComponentsObject) {
+        dynamic vbaComponents = vbaComponentsObject;
+        var modules = new List<VbaModuleSnapshot>();
+        var componentCount = Convert.ToInt32(vbaComponents.Count);
+
+        for (var index = 1; index <= componentCount; index++) {
+            dynamic? component = null;
+            dynamic? codeModule = null;
+
+            try {
+                component = vbaComponents.Item(index);
+                codeModule = component.CodeModule;
+
+                var moduleName = Convert.ToString(component.Name)?.Trim() ?? string.Empty;
+                var moduleType = Convert.ToInt32(component.Type);
+                var lineCount = Convert.ToInt32(codeModule.CountOfLines);
+                var moduleCode = lineCount > 0
+                    ? Convert.ToString(codeModule.Lines[1, lineCount]) ?? string.Empty
+                    : string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(moduleName))
+                    modules.Add(new VbaModuleSnapshot(moduleName, moduleType, moduleCode));
+            }
+            finally {
+                ReleaseComObject(codeModule);
+                ReleaseComObject(component);
+            }
+        }
+
+        return modules;
+    }
+
+    private static void ReadVbaProcedureSource(
+        MacroButtonConfig button,
+        IReadOnlyCollection<VbaModuleSnapshot> modules) {
+        var target = ResolveVbaProcedureTarget(button);
+
+        button.VbaModuleName = target.ModuleName;
+        button.VbaProcedureName = target.ProcedureName;
+
+        if (string.IsNullOrWhiteSpace(target.ProcedureName)) {
+            button.VbaReadError = "Nie udało się ustalić nazwy procedury przypisanej do przycisku.";
+            return;
+        }
+
+        IEnumerable<VbaModuleSnapshot> candidates = modules;
+
+        if (!string.IsNullOrWhiteSpace(target.ModuleName)) {
+            var matchingModules = modules
+                .Where(module => string.Equals(
+                    module.Name,
+                    target.ModuleName,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (matchingModules.Count > 0)
+                candidates = matchingModules;
+        }
+        else
+            candidates = modules
+                .OrderByDescending(module => module.Type == VbaStandardModuleType)
+                .ThenBy(module => module.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var module in candidates) {
+            if (!TryExtractVbaProcedure(module.Code, target.ProcedureName, out var procedureCode))
+                continue;
+
+            button.VbaModuleName = module.Name;
+            button.VbaProcedureCode = procedureCode;
+            button.VbaReadError = string.Empty;
+            return;
+        }
+
+        var moduleDescription = string.IsNullOrWhiteSpace(target.ModuleName)
+            ? "projekcie VBA"
+            : $"module '{target.ModuleName}'";
+
+        button.VbaReadError =
+            $"Nie znaleziono całej procedury '{target.ProcedureName}' w {moduleDescription}.";
+    }
+
+    private static VbaProcedureTarget ResolveVbaProcedureTarget(MacroButtonConfig button) {
+        if (button.IsActiveXCommandButton) {
+            var controlName = !string.IsNullOrWhiteSpace(button.OleObjectName)
+                ? button.OleObjectName.Trim()
+                : button.MacroName.Trim();
+
+            return new VbaProcedureTarget(
+                button.WorksheetCodeName.Trim(),
+                string.IsNullOrWhiteSpace(controlName)
+                    ? string.Empty
+                    : $"{controlName}_Click");
+        }
+
+        var macroReference = button.MacroName.Trim();
+
+        if (string.IsNullOrWhiteSpace(macroReference))
+            return new VbaProcedureTarget(string.Empty, string.Empty);
+
+        macroReference = macroReference.Trim('"');
+
+        var workbookSeparatorIndex = macroReference.LastIndexOf('!');
+
+        if (workbookSeparatorIndex >= 0 && workbookSeparatorIndex < macroReference.Length - 1)
+            macroReference = macroReference[(workbookSeparatorIndex + 1)..];
+
+        macroReference = macroReference.Trim().Trim('\'').Trim();
+
+        if (macroReference.EndsWith("()", StringComparison.Ordinal))
+            macroReference = macroReference[..^2].Trim();
+
+        var moduleSeparatorIndex = macroReference.LastIndexOf('.');
+
+        if (moduleSeparatorIndex <= 0 || moduleSeparatorIndex >= macroReference.Length - 1)
+            return new VbaProcedureTarget(string.Empty, NormalizeVbaIdentifier(macroReference));
+
+        return new VbaProcedureTarget(
+            NormalizeVbaIdentifier(macroReference[..moduleSeparatorIndex]),
+            NormalizeVbaIdentifier(macroReference[(moduleSeparatorIndex + 1)..]));
+    }
+
+    private static string NormalizeVbaIdentifier(string value) {
+        return value.Trim().Trim('\'').Trim('[', ']');
+    }
+
+    private static bool TryExtractVbaProcedure(
+        string moduleCode,
+        string procedureName,
+        out string procedureCode) {
+        procedureCode = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(moduleCode) || string.IsNullOrWhiteSpace(procedureName))
+            return false;
+
+        var normalizedCode = moduleCode
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        var lines = normalizedCode.Split('\n');
+
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++) {
+            var declarationEndIndex = lineIndex;
+            var declaration = ReadVbaLogicalLine(lines, lineIndex, out declarationEndIndex);
+            var match = VbaProcedureDeclarationRegex.Match(declaration);
+
+            if (!match.Success ||
+                !string.Equals(
+                    match.Groups["name"].Value,
+                    procedureName,
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var endKeyword = GetVbaProcedureEndKeyword(match.Groups["kind"].Value);
+
+            for (var endLineIndex = declarationEndIndex + 1;
+                 endLineIndex < lines.Length;
+                 endLineIndex++) {
+                if (!IsVbaProcedureEndLine(lines[endLineIndex], endKeyword))
+                    continue;
+
+                procedureCode = string.Join(
+                    Environment.NewLine,
+                    lines[lineIndex..(endLineIndex + 1)]);
+                return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private static string ReadVbaLogicalLine(
+        IReadOnlyList<string> lines,
+        int startIndex,
+        out int endIndex) {
+        endIndex = startIndex;
+        var logicalLine = lines[startIndex].Trim();
+
+        while (logicalLine.EndsWith(" _", StringComparison.Ordinal) &&
+               endIndex + 1 < lines.Count)
+            logicalLine = logicalLine[..^2].TrimEnd() + " " + lines[++endIndex].TrimStart();
+
+        return logicalLine;
+    }
+
+    private static string GetVbaProcedureEndKeyword(string procedureKind) {
+        if (procedureKind.StartsWith("Function", StringComparison.OrdinalIgnoreCase))
+            return "Function";
+
+        if (procedureKind.StartsWith("Property", StringComparison.OrdinalIgnoreCase))
+            return "Property";
+
+        return "Sub";
+    }
+
+    private static bool IsVbaProcedureEndLine(string line, string endKeyword) {
+        var trimmedLine = line.TrimStart();
+
+        if (!trimmedLine.StartsWith($"End {endKeyword}", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var remainingText = trimmedLine[(endKeyword.Length + 4)..].TrimStart();
+
+        return remainingText.Length == 0 ||
+               remainingText.StartsWith("'", StringComparison.Ordinal) ||
+               remainingText.StartsWith(":", StringComparison.Ordinal);
+    }
+
+    private static void ResetVbaProcedureSource(MacroButtonConfig button) {
+        button.VbaModuleName = string.Empty;
+        button.VbaProcedureName = string.Empty;
+        button.VbaProcedureCode = string.Empty;
+        button.VbaReadError = string.Empty;
+    }
+
+    private static void SetVbaReadError(IEnumerable<MacroButtonConfig> buttons, string errorMessage) {
+        foreach (var button in buttons)
+            if (!button.HasVbaProcedureCode && string.IsNullOrWhiteSpace(button.VbaReadError))
+                button.VbaReadError = errorMessage;
+    }
+
+    private static string CreateVbaProjectReadError(Exception exception) {
+        var detail = exception.Message?.Trim();
+        var message =
+            "Excel nie udostępnił kodu projektu VBA. W ustawieniach Centrum zaufania musi być włączona opcja " +
+            "„Zaufaj dostępowi do modelu obiektowego projektu VBA”, a projekt nie może być zablokowany hasłem.";
+
+        return string.IsNullOrWhiteSpace(detail)
+            ? message
+            : $"{message} Szczegóły: {detail}";
     }
 
     public void Recalculate() {
@@ -1747,4 +2028,8 @@ public class ExcelSessionService : IDisposable {
             // Excel may already be shutting down; no further action is needed.
         }
     }
+
+    private sealed record VbaModuleSnapshot(string Name, int Type, string Code);
+
+    private sealed record VbaProcedureTarget(string ModuleName, string ProcedureName);
 }
